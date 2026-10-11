@@ -7,7 +7,7 @@
 
 services:
   aural:
-    image: ghcr.io/pmow/aural:latest
+    image: ghcr.io/pmow/gutness:latest
     build: .
     ports:
       - "8078:8078"

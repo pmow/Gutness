@@ -1,4 +1,4 @@
-# Tests every push, and publishes ghcr.io/<owner>/aural:latest from main.
+# Tests every push, and publishes ghcr.io/<owner>/<repo>:latest from main.
 name: docker
 on:
   push:
@@ -31,7 +31,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/aural
+          images: ghcr.io/${{ github.repository }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
