@@ -18,23 +18,38 @@ and an optional LLM (Ollama), all from `docker-compose.yml`. Web UI on port **80
    - **not a set**: anything else, with the reason shown (e.g. "names say 53
      parts but only 52 audio files are here; missing part 17"). These are
      listed but not sampled.
-2. **Sample.** ffmpeg cuts 30 seconds (`SAMPLE_SECONDS`, from `SAMPLE_START`)
-   from part 1 as 16 kHz mono WAV. You can play it on the book's page.
-3. **Transcribe** with Whisper.
-4. **Read the transcript.** The LLM extracts title, author, narrator and
-   series from what was said ("This is Audible. The Way of Kings, by…").
-   Without an LLM, pattern matching does the same for the common phrasings.
-5. **Look up** in Audible's catalog, Open Library and Google Books. Each
-   search is a job in a queue; a background worker per catalog sends them
-   only as fast as that catalog's limits allow and pauses on HTTP 429/503
+2. **Recognize** with the enabled methods, in order. When one can't identify
+   the book, the next takes over (`methods.go`; each method is a small Go type,
+   so more can be added).
+
+   **Method 1, Title announcement.** Transcribes the first 15 seconds of part 1
+   and looks for `[Someone presents:] The Title, by Author[, read by Narrator]`.
+   Title and author are required; the rest is optional. Pattern matching reads
+   it; the LLM is asked only if the pattern finds nothing (optional). The title
+   and author are then searched in Audible's catalog, Open Library and Google
+   Books, and the results scored against what was heard: 80%+ is matched,
+   45%+ goes to review.
+
+   **Method 2, Text search.** Transcribes a random 30 seconds from the middle
+   80% of the whole set and searches the text inside books (Google Books, and
+   Open Library's "search inside" over Internet Archive scans). One book found
+   is a match. Two or more: take another random 30 seconds and search with all
+   60 seconds of words. Still several: you pick from the list.
+3. **Lookups are queued.** A background worker per catalog sends searches only
+   as fast as that catalog's limits allow and pauses on HTTP 429/503
    (honouring `Retry-After`, otherwise backing off 1, 5, 15, 60 minutes).
    Call history is stored, so a restart keeps the budget.
-6. **Score.** Results are compared with what was heard. 80%+ is **matched**,
-   45%+ is **needs review** (pick a result or type the details yourself),
-   lower is **no match**.
-7. **Organize (final step, manual).** Matched books move to
+4. **Organize (final step, manual).** Matched books move to
    `Author/Series/Vol N - Title` or `Author/Title` inside their library.
    Preview first, never overwrites, held on any conflict, undo from a journal.
+
+## Settings page
+
+Everything about the two methods (on/off, sample start and length, middle
+percentage, extra samples, words per search, which catalogs, score
+thresholds, whether to use the LLM, whether a single text-search hit counts
+as a match), the catalog limits and the Whisper language. Saved in the
+database and applied immediately.
 
 ## Web UI
 
@@ -44,7 +59,11 @@ and an optional LLM (Ollama), all from `docker-compose.yml`. Web UI on port **80
 - **Books**: filter tabs with counts (defaults to *Pending recognition*),
   library picker and search across folder, title, author and transcript.
 - **Lookup queue**: every catalog search, filterable by state and catalog.
+- **Book page**: every sample with a player and its transcript, catalog
+  results with "Use this", manual entry, and buttons to start over or run
+  text search.
 - **Organize**: the final move, with undo.
+- **Settings**: see above.
 
 ## Run
 
@@ -55,21 +74,25 @@ The library is mounted at `/audiobooks` and added automatically; add more
 folders (subfolders, or other mounts) from the UI. The first start downloads
 the Whisper and LLM models.
 
-## Settings (environment)
+## Environment
 
 | Variable | Default | |
 |---|---|---|
 | `LIBRARIES` | | `:`-separated folders to add on start |
-| `SAMPLE_SECONDS` / `SAMPLE_START` | 30 / 0 | sample length and offset |
-| `WHISPER_URL`, `WHISPER_LANGUAGE` | `http://localhost:9000`, `en` | |
+| `WHISPER_URL` | `http://localhost:9000` | |
 | `OLLAMA_URL`, `OLLAMA_MODEL` | off, `llama3.2:3b` | the model is pulled automatically |
-| `LOOKUP_APIS` | `audible,openlibrary,googlebooks` | which catalogs to search |
-| `API_LIMITS` | see below | e.g. `audible=1/2s,300/1h;googlebooks=1/1s,1000/24h` |
+| `LOOKUP_APIS` | `audible,openlibrary,googlebooks` | |
 | `AUDIBLE_REGION` | `com` | `co.uk`, `de`, `ca`, `com.au`, … |
-| `GOOGLE_BOOKS_API_KEY` | | optional |
+| `GOOGLE_BOOKS_API_KEY` | | optional, raises Google's daily limit |
 | `RESCAN_HOURS` | 6 | |
+| `API_LIMITS`, `WHISPER_LANGUAGE` | | first-run defaults; then use the Settings page |
 
-Default limits: Audible 1 per 2 s and 300 per hour; Open Library 1 per s and
-500 per hour; Google Books 1 per s and 1000 per day.
+## Models
+
+Both download themselves on first start: Whisper's `base.en` model (from
+Hugging Face, via the whisper container) and the LLM (`llama3.2:3b`, about
+2 GB, pulled by the app through Ollama). To fetch the LLM by hand:
+`docker compose exec ollama ollama pull llama3.2:3b`. The LLM is optional;
+remove `OLLAMA_URL` to run without it.
 
 The UI has no login; keep port 8078 on your home network.

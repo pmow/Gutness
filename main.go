@@ -67,6 +67,8 @@ func main() {
 	app := &App{db: db, cfg: cfg, apis: apis, limiter: NewLimiter(db, apis), token: newToken(),
 		services: map[string]*ServiceStatus{}, wake: make(chan struct{}, 1), scanning: map[int64]bool{}}
 
+	app.applySettings(loadSettings(db, cfg))
+
 	// Library folders can be listed up front, e.g. LIBRARIES=/audiobooks/a:/audiobooks/b
 	for _, p := range filepath.SplitList(os.Getenv("LIBRARIES")) {
 		if p = strings.TrimSpace(p); p != "" {

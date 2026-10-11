@@ -18,12 +18,10 @@ services:
       WHISPER_LANGUAGE: en
       OLLAMA_URL: http://ollama:11434         # remove to skip the LLM and use pattern matching
       OLLAMA_MODEL: llama3.2:3b
-      SAMPLE_SECONDS: 30
-      SAMPLE_START: 0
+      # Sample lengths, methods and catalog limits are set on the Settings page.
       LOOKUP_APIS: audible,openlibrary,googlebooks
       AUDIBLE_REGION: com                     # com, co.uk, de, fr, ca, com.au, ...
       # GOOGLE_BOOKS_API_KEY: ""              # optional; raises Google's daily limit
-      # API_LIMITS: "audible=1/2s,300/1h;openlibrary=1/1s,500/1h;googlebooks=1/1s,1000/24h"
     depends_on: [whisper, ollama]
     restart: unless-stopped
 

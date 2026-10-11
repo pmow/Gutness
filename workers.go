@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,10 +28,14 @@ type App struct {
 	limiter *Limiter
 	token   string
 
-	mu       sync.Mutex
-	services map[string]*ServiceStatus
-	wake     chan struct{}
-	scanning map[int64]bool
+	mu  sync.Mutex
+	cur Settings // guarded by mu; read with settings()
+
+	// transcribe replaces the Whisper call in tests.
+	transcribe func(ctx context.Context, lang, path string) (string, error)
+	services   map[string]*ServiceStatus
+	wake       chan struct{}
+	scanning   map[int64]bool
 }
 
 func (a *App) setService(name string, ok bool, detail string) {
@@ -94,18 +99,53 @@ func (a *App) stage(ctx context.Context, status string, fn func(context.Context,
 	}
 }
 
+func (a *App) settings() Settings {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.cur
+}
+
+// doSample starts the item's current method (or the first enabled one) and
+// cuts the audio that method asks for.
 func (a *App) doSample(ctx context.Context, it *Item) error {
-	wav, err := ExtractSample(ctx, a.cfg, it)
+	s := a.settings()
+	m := methodByName(it.Method)
+	if m == nil || !m.Enabled(s) {
+		if m = nextMethod(s, ""); m == nil {
+			return setStatus(a.db, it.ID, StNoMatch, "no recognition methods are enabled (see Settings)")
+		}
+		it.Method = m.Name()
+	}
+	if len(it.Files) == 0 {
+		return errors.New("item has no files")
+	}
+	si, err := m.NextSample(ctx, s, it)
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec(`UPDATE items SET sample=?, status=?, detail='', attempts=0, next_at=0, updated=? WHERE id=?`,
-		wav, StPendingTranscript, now(), it.ID)
+	si.Path = filepath.Join(a.cfg.DataDir, "samples", fmt.Sprintf("%d-%d.wav", it.ID, len(it.Samples)+1))
+	if err := ExtractSample(ctx, filepath.Join(it.Folder, si.File), si.Offset, si.Seconds, si.Path); err != nil {
+		return err
+	}
+	it.Samples = append(it.Samples, si)
+	_, err = a.db.Exec(`UPDATE items SET method=?, samples=?, durations=?, sample=?, status=?, detail='', attempts=0, next_at=0, updated=? WHERE id=?`,
+		it.Method, mustJSON(it.Samples), mustJSON(it.Durations), si.Path, StPendingTranscript, now(), it.ID)
 	return err
 }
 
+// doTranscribe transcribes the newest sample.
 func (a *App) doTranscribe(ctx context.Context, it *Item) error {
-	text, err := Transcribe(ctx, a.cfg, it.Sample)
+	if len(it.Samples) == 0 {
+		return setStatus(a.db, it.ID, StPendingSample, "")
+	}
+	last := &it.Samples[len(it.Samples)-1]
+	transcribe := a.transcribe
+	if transcribe == nil {
+		transcribe = func(ctx context.Context, lang, path string) (string, error) {
+			return Transcribe(ctx, a.cfg, lang, path)
+		}
+	}
+	text, err := transcribe(ctx, a.settings().WhisperLanguage, last.Path)
 	if err != nil {
 		var down errServiceDown
 		if errors.As(err, &down) {
@@ -114,61 +154,86 @@ func (a *App) doTranscribe(ctx context.Context, it *Item) error {
 		return err
 	}
 	a.setService("whisper", true, "transcribing")
-	if strings.TrimSpace(text) == "" {
-		_, err = a.db.Exec(`UPDATE items SET transcript='', status=?, detail=?, attempts=0, updated=? WHERE id=?`,
-			StNoMatch, "no speech heard in the sample", now(), it.ID)
-		return err
-	}
-	_, err = a.db.Exec(`UPDATE items SET transcript=?, status=?, detail='', attempts=0, next_at=0, updated=? WHERE id=?`,
-		text, StPendingExtract, now(), it.ID)
+	last.Text = text
+	_, err = a.db.Exec(`UPDATE items SET samples=?, transcript=?, status=?, detail='', attempts=0, next_at=0, updated=? WHERE id=?`,
+		mustJSON(it.Samples), heardBy(it, it.Method), StPendingExtract, now(), it.ID)
 	return err
 }
 
+// doExtract lets the method turn what it heard into searches.
 func (a *App) doExtract(ctx context.Context, it *Item) error {
-	g, err := ExtractGuess(ctx, a.cfg, it.Transcript)
+	s := a.settings()
+	m := methodByName(it.Method)
+	if m == nil {
+		return setStatus(a.db, it.ID, StPendingSample, "")
+	}
+	g, q, err := m.Plan(ctx, a, s, it)
+	if errors.Is(err, errGiveUp) {
+		return a.advance(it, err.Error(), nil)
+	}
 	if err != nil {
-		var down errServiceDown
-		if errors.As(err, &down) {
-			a.setService("llm", false, err.Error())
-		}
 		return err
 	}
-	if a.cfg.OllamaURL != "" {
-		a.setService("llm", true, "model "+a.cfg.OllamaModel)
-	}
-	return a.queueLookups(it.ID, g, it.Transcript)
+	return a.queueLookups(it, m, g, q)
 }
 
-// queueLookups stores the guess and queues one search per API.
-func (a *App) queueLookups(id int64, g Guess, transcript string) error {
-	q := Query{Title: g.Title, Author: g.Author}
-	if q.Title == "" {
-		// Nothing clear was extracted; search on the first words heard.
-		words := strings.Fields(transcript)
-		q.Keywords = strings.Join(words[:min(len(words), 12)], " ")
+// advance hands the item to the next enabled method, or ends recognition.
+func (a *App) advance(it *Item, reason string, cands []Candidate) error {
+	next := nextMethod(a.settings(), it.Method)
+	if cands == nil {
+		cands = it.Candidates
 	}
+	if next == nil {
+		_, err := a.db.Exec(`UPDATE items SET status=?, detail=?, candidates=?, attempts=0, next_at=0, updated=? WHERE id=?`,
+			StNoMatch, reason, mustJSON(cands), now(), it.ID)
+		return err
+	}
+	_, err := a.db.Exec(`UPDATE items SET method=?, status=?, detail=?, candidates=?, attempts=0, next_at=0, updated=? WHERE id=?`,
+		next.Name(), StPendingSample, reason+"; trying "+next.Label(), mustJSON(cands), now(), it.ID)
+	return err
+}
+
+// queueLookups stores the guess and queues one search per catalog the method uses.
+func (a *App) queueLookups(it *Item, m Method, g Guess, q Query) error {
+	s := a.settings()
+	round := len(samplesOf(it, m.Name()))
 	tx, err := a.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	tx.Exec(`DELETE FROM jobs WHERE item_id=? AND status IN ('queued','failed')`, id)
+	tx.Exec(`DELETE FROM jobs WHERE item_id=? AND method=? AND round=?`, it.ID, m.Name(), round)
+	n := 0
 	for _, api := range a.apis {
-		if _, err := tx.Exec(`INSERT INTO jobs(item_id, api, query, status, created, updated) VALUES(?,?,?,?,?,?)`,
-			id, api.Name, mustJSON(q), "queued", now(), now()); err != nil {
+		if !contains1(m.Catalogs(s), api.Name) {
+			continue
+		}
+		n++
+		if _, err := tx.Exec(`INSERT INTO jobs(item_id, api, method, round, query, status, created, updated) VALUES(?,?,?,?,?,?,?,?)`,
+			it.ID, api.Name, m.Name(), round, mustJSON(q), "queued", now(), now()); err != nil {
 			return err
 		}
 	}
-	if _, err := tx.Exec(`UPDATE items SET guess=?, candidates='[]', status=?, detail='', attempts=0, next_at=0, updated=? WHERE id=?`,
-		mustJSON(g), StPendingLookup, now(), id); err != nil {
+	if n == 0 {
+		tx.Rollback()
+		return a.advance(it, m.Label()+" has no catalogs selected", nil)
+	}
+	if _, err := tx.Exec(`UPDATE items SET method=?, guess=?, status=?, detail='', attempts=0, next_at=0, updated=? WHERE id=?`,
+		m.Name(), mustJSON(g), StPendingLookup, now(), it.ID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	a.poke()
+	return nil
 }
 
 type Job struct {
 	ID, ItemID       int64
 	API, Status      string
+	Method           string
+	Round            int
 	Query            Query
 	Attempts         int
 	NextAt           int64
@@ -207,8 +272,7 @@ func (a *App) lookupLoop(ctx context.Context, api *API) {
 		var q Query
 		jsonUnmarshal(qs, &q)
 		a.db.Exec(`UPDATE jobs SET status='running', updated=? WHERE id=?`, now(), id)
-		t := time.Now()
-		a.limiter.Record(api, t)
+		a.limiter.Record(api, time.Now())
 		cs, err := api.Search(ctx, q)
 		var rl errRateLimited
 		switch {
@@ -231,23 +295,29 @@ func (a *App) lookupLoop(ctx context.Context, api *API) {
 			a.db.Exec(`UPDATE jobs SET status='done', error='', result=?, updated=? WHERE id=?`, mustJSON(cs), now(), id)
 		}
 		if err := a.finishIfDone(itemID); err != nil {
-			log.Printf("score item %d: %v", itemID, err)
+			log.Printf("decide item %d: %v", itemID, err)
 		}
 	}
 }
 
-// finishIfDone scores an item once none of its searches are outstanding.
+// finishIfDone lets the method decide once the current round's searches are all back.
 func (a *App) finishIfDone(itemID int64) error {
-	var open int
-	a.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE item_id=? AND status IN ('queued','running')`, itemID).Scan(&open)
-	if open > 0 {
-		return nil
-	}
 	it, err := getItem(a.db, itemID)
 	if err != nil || it.Status != StPendingLookup {
 		return err
 	}
-	rows, err := a.db.Query(`SELECT status, result, error FROM jobs WHERE item_id=?`, itemID)
+	m := methodByName(it.Method)
+	if m == nil {
+		return setStatus(a.db, it.ID, StPendingSample, "")
+	}
+	round := len(samplesOf(it, it.Method))
+	var open int
+	a.db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE item_id=? AND method=? AND round=? AND status IN ('queued','running')`,
+		itemID, it.Method, round).Scan(&open)
+	if open > 0 {
+		return nil
+	}
+	rows, err := a.db.Query(`SELECT status, result, error FROM jobs WHERE item_id=? AND method=? AND round=?`, itemID, it.Method, round)
 	if err != nil {
 		return err
 	}
@@ -264,34 +334,28 @@ func (a *App) finishIfDone(itemID int64) error {
 		}
 	}
 	rows.Close()
-	all = ScoreCandidates(it.Guess, it.Transcript, all)
-	status, detail := StNoMatch, "no catalog entry resembles what was heard"
-	if len(failures) > 0 && len(all) == 0 {
-		status, detail = StError, "every search failed: "+strings.Join(failures, "; ")
+	if len(all) == 0 && len(failures) > 0 {
+		_, err = a.db.Exec(`UPDATE items SET status=?, detail=?, updated=? WHERE id=?`,
+			StError, "every search failed: "+strings.Join(failures, "; "), now(), itemID)
+		return err
 	}
-	var best Candidate
-	if len(all) > 0 {
-		best = all[0]
-		// A different book scoring almost as well means we can't be sure.
-		rival := false
-		for _, c := range all[1:] {
-			if nameKey(c.Title) != nameKey(best.Title) && best.Score-c.Score < 0.1 {
-				rival = true
-				break
-			}
-		}
-		switch {
-		case best.Score >= matchThreshold && !rival:
-			status, detail = StMatched, fmt.Sprintf("matched on %s (%.0f%%)", best.API, best.Score*100)
-		case best.Score >= reviewThreshold:
-			status, detail = StReview, fmt.Sprintf("best guess %.0f%% on %s; please confirm", best.Score*100, best.API)
-		}
+	v := m.Decide(a.settings(), it, all)
+	switch {
+	case v.MoreAudio:
+		_, err = a.db.Exec(`UPDATE items SET status=?, detail=?, candidates=?, attempts=0, next_at=0, updated=? WHERE id=?`,
+			StPendingSample, v.Detail, mustJSON(v.Candidates), now(), itemID)
+		return err
+	case v.GiveUp:
+		return a.advance(it, v.Detail, v.Candidates)
+	case v.Status == StMatched:
+		return a.acceptCandidate(it, v.Candidates[0], "auto", v.Status, v.Detail, v.Candidates)
 	}
-	if status == StMatched {
-		return a.acceptCandidate(it, best, "auto", status, detail, all)
+	score := 0.0
+	if len(v.Candidates) > 0 {
+		score = v.Candidates[0].Score
 	}
 	_, err = a.db.Exec(`UPDATE items SET candidates=?, score=?, status=?, detail=?, updated=? WHERE id=?`,
-		mustJSON(all), best.Score, status, detail, now(), itemID)
+		mustJSON(v.Candidates), score, v.Status, v.Detail, now(), itemID)
 	return err
 }
 
@@ -325,7 +389,7 @@ func (a *App) watchServices(ctx context.Context) {
 			a.setService("whisper", true, "ready")
 		}
 		if a.cfg.OllamaURL == "" {
-			a.setService("llm", true, "off: using pattern matching on the transcript")
+			a.setService("llm", true, "not configured; announcements are read by pattern matching")
 		} else if has, err := ollamaHasModel(ctx, a.cfg); err != nil {
 			a.setService("llm", false, "not reachable: "+err.Error())
 		} else if !has {

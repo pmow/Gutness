@@ -18,6 +18,7 @@ type Query struct {
 	Title    string `json:"title,omitempty"`
 	Author   string `json:"author,omitempty"`
 	Keywords string `json:"keywords,omitempty"`
+	FullText string `json:"full_text,omitempty"` // words heard inside the book
 }
 
 type Window struct {
@@ -119,6 +120,7 @@ func buildAPIs(cfg Config) ([]*API, error) {
 type Limiter struct {
 	mu       sync.Mutex
 	db       *sql.DB
+	windows  map[string][]Window
 	calls    map[string][]time.Time
 	cooldown map[string]time.Time
 	strikes  map[string]int
@@ -127,10 +129,11 @@ type Limiter struct {
 }
 
 func NewLimiter(db *sql.DB, apis []*API) *Limiter {
-	l := &Limiter{db: db, calls: map[string][]time.Time{}, cooldown: map[string]time.Time{},
+	l := &Limiter{db: db, windows: map[string][]Window{}, calls: map[string][]time.Time{}, cooldown: map[string]time.Time{},
 		strikes: map[string]int{}, lastErr: map[string]string{}, lastOK: map[string]time.Time{}}
 	for _, a := range apis {
-		longest := time.Duration(0)
+		l.windows[a.Name] = a.Windows
+		longest := 24 * time.Hour // keep a day of history so limits can be raised later
 		for _, w := range a.Windows {
 			if w.Per > longest {
 				longest = w.Per
@@ -166,7 +169,7 @@ func (l *Limiter) ReadyAt(a *API, t time.Time) (time.Time, string) {
 		ready, why = cd, "cooling down after the service asked us to slow down"
 	}
 	calls := l.calls[a.Name]
-	for _, w := range a.Windows {
+	for _, w := range l.windows[a.Name] {
 		var in []time.Time
 		for _, c := range calls {
 			if c.After(t.Add(-w.Per)) {
@@ -188,7 +191,7 @@ func (l *Limiter) Usage(a *API, t time.Time) []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var out []string
-	for _, w := range a.Windows {
+	for _, w := range l.windows[a.Name] {
 		n := 0
 		for _, c := range l.calls[a.Name] {
 			if c.After(t.Add(-w.Per)) {
@@ -202,8 +205,8 @@ func (l *Limiter) Usage(a *API, t time.Time) []string {
 
 func (l *Limiter) Record(a *API, t time.Time) {
 	l.mu.Lock()
-	longest := time.Duration(0)
-	for _, w := range a.Windows {
+	longest := 24 * time.Hour
+	for _, w := range l.windows[a.Name] {
 		if w.Per > longest {
 			longest = w.Per
 		}
@@ -335,6 +338,9 @@ func audibleSearch(region string) func(context.Context, Query) ([]Candidate, err
 }
 
 func openLibrarySearch(ctx context.Context, q Query) ([]Candidate, error) {
+	if q.FullText != "" {
+		return openLibraryInside(ctx, q.FullText)
+	}
 	v := url.Values{"limit": {"5"}, "fields": {"key,title,subtitle,author_name,first_publish_year"}}
 	if q.Title != "" {
 		v.Set("title", q.Title)
@@ -368,7 +374,10 @@ func openLibrarySearch(ctx context.Context, q Query) ([]Candidate, error) {
 func googleBooksSearch(key string) func(context.Context, Query) ([]Candidate, error) {
 	return func(ctx context.Context, q Query) ([]Candidate, error) {
 		var terms []string
-		if q.Title != "" {
+		if q.FullText != "" {
+			// Google Books searches the text inside books as well as their details.
+			terms = append(terms, q.FullText)
+		} else if q.Title != "" {
 			terms = append(terms, `intitle:"`+q.Title+`"`)
 			if q.Author != "" {
 				terms = append(terms, `inauthor:"`+q.Author+`"`)
@@ -403,4 +412,68 @@ func googleBooksSearch(key string) func(context.Context, Query) ([]Candidate, er
 		}
 		return cs, nil
 	}
+}
+
+// openLibraryInside searches the text of books scanned by the Internet
+// Archive ("search inside").
+func openLibraryInside(ctx context.Context, text string) ([]Candidate, error) {
+	v := url.Values{"q": {text}}
+	var out struct {
+		Hits struct {
+			Hits []struct {
+				Fields struct {
+					Identifier  []string `json:"identifier"`
+					MetaTitle   []string `json:"meta_title"`
+					MetaCreator []string `json:"meta_creator"`
+					Year        []string `json:"year"`
+				} `json:"fields"`
+				Edition *struct {
+					Key, Title, Subtitle string
+					Authors              []struct{ Name string }
+					PublishDate          string `json:"publish_date"`
+				} `json:"edition"`
+			} `json:"hits"`
+		} `json:"hits"`
+	}
+	if err := getJSON(ctx, env("OPENLIBRARY_BASE_URL", "https://openlibrary.org")+"/search/inside.json?"+v.Encode(), &out); err != nil {
+		return nil, err
+	}
+	var cs []Candidate
+	for _, h := range out.Hits.Hits {
+		c := Candidate{API: "openlibrary"}
+		if e := h.Edition; e != nil && e.Title != "" {
+			c.ID, c.URL, c.Title, c.Subtitle = e.Key, "https://openlibrary.org"+e.Key, e.Title, e.Subtitle
+			for _, a := range e.Authors {
+				c.Authors = append(c.Authors, a.Name)
+			}
+			if n := len(e.PublishDate); n >= 4 {
+				c.Year = e.PublishDate[n-4:]
+			}
+		} else if len(h.Fields.MetaTitle) > 0 {
+			c.Title, c.Authors = h.Fields.MetaTitle[0], h.Fields.MetaCreator
+			if len(h.Fields.Identifier) > 0 {
+				c.ID, c.URL = h.Fields.Identifier[0], "https://archive.org/details/"+h.Fields.Identifier[0]
+			}
+			if len(h.Fields.Year) > 0 {
+				c.Year = h.Fields.Year[0]
+			}
+		} else {
+			continue
+		}
+		cs = append(cs, c)
+	}
+	return cs, nil
+}
+
+// SetWindows changes an API's limits while running (from the settings page).
+func (l *Limiter) SetWindows(api string, ws []Window) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.windows[api] = ws
+}
+
+func (l *Limiter) Windows(api string) []Window {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.windows[api]
 }

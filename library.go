@@ -113,7 +113,7 @@ func ScanLibrary(db *sql.DB, lib Library) (ScanSummary, error) {
 			sum.Changed++
 			// The folder's contents changed: start recognition over.
 			_, err = db.Exec(`UPDATE items SET kind=?, total=?, files=?, bytes=?, reason=?, status=?, detail='', attempts=0,
-				next_at=0, sample='', transcript='', guess='{}', candidates='[]', score=0, missing=0, updated=? WHERE id=?`,
+				next_at=0, sample='', transcript='', guess='{}', candidates='[]', score=0, missing=0, method='', samples='[]', durations='[]', updated=? WHERE id=?`,
 				det.Kind, det.Total, files, f.bytes, det.Reason, status, now(), id)
 			if err == nil {
 				_, err = db.Exec(`DELETE FROM jobs WHERE item_id=?`, id)

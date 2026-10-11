@@ -66,6 +66,9 @@ func (a *App) templates() *template.Template {
 		"json":    func(v any) template.JS { b, _ := json.Marshal(v); return template.JS(b) },
 		"qs":      qs,
 		"pending": func(s string) bool { return strings.HasPrefix(s, "pending_") },
+		"method":  methodLabel,
+		"has":     contains1,
+		"secs":    func(f float64) string { return fmt.Sprintf("%d:%02d", int(f)/60, int(f)%60) },
 	}).ParseFS(templateFS, "templates/*.html"))
 }
 
@@ -123,7 +126,9 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("GET /queue", func(w http.ResponseWriter, r *http.Request) { a.queuePage(w, r, render) })
 	mux.HandleFunc("GET /item/{id}", func(w http.ResponseWriter, r *http.Request) { a.itemPage(w, r, render) })
 	mux.HandleFunc("GET /organize", func(w http.ResponseWriter, r *http.Request) { a.organizePage(w, r, render) })
-	mux.HandleFunc("GET /sample/{id}", a.serveSample)
+	mux.HandleFunc("GET /sample/{id}/{n}", a.serveSample)
+	mux.HandleFunc("GET /settings", func(w http.ResponseWriter, r *http.Request) { a.settingsPage(w, r, render) })
+	mux.HandleFunc("POST /settings", a.post(a.settingsHandler))
 	mux.HandleFunc("GET /status.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(a.statusSnapshot())
@@ -264,14 +269,14 @@ func (a *App) queuePage(w http.ResponseWriter, r *http.Request, render func(http
 	if api != "" {
 		where, args = append(where, "j.api=?"), append(args, api)
 	}
-	rows, err := a.db.Query(`SELECT j.id, j.item_id, j.api, j.status, j.query, j.attempts, j.next_at, j.error, j.result, j.created, j.updated, i.folder
+	rows, err := a.db.Query(`SELECT j.id, j.item_id, j.api, j.method, j.round, j.status, j.query, j.attempts, j.next_at, j.error, j.result, j.created, j.updated, i.folder
 		FROM jobs j JOIN items i ON i.id=j.item_id WHERE `+strings.Join(where, " AND ")+` ORDER BY j.next_at, j.id LIMIT 500`, args...)
 	var jobs []Job
 	if err == nil {
 		for rows.Next() {
 			var j Job
 			var qstr, res string
-			rows.Scan(&j.ID, &j.ItemID, &j.API, &j.Status, &qstr, &j.Attempts, &j.NextAt, &j.Error, &res, &j.Created, &j.Updated, &j.Folder)
+			rows.Scan(&j.ID, &j.ItemID, &j.API, &j.Method, &j.Round, &j.Status, &qstr, &j.Attempts, &j.NextAt, &j.Error, &res, &j.Created, &j.Updated, &j.Folder)
 			jsonUnmarshal(qstr, &j.Query)
 			var cs []Candidate
 			jsonUnmarshal(res, &cs)
@@ -309,18 +314,20 @@ func (a *App) itemPage(w http.ResponseWriter, r *http.Request, render func(http.
 	if it.Author != "" && it.Title != "" {
 		target = TargetDir(root, it)
 	}
-	render(w, "item.html", map[string]any{"Item": it, "Root": root, "Target": target, "Msg": r.URL.Query().Get("msg")})
+	render(w, "item.html", map[string]any{"Item": it, "Root": root, "Target": target, "Msg": r.URL.Query().Get("msg"),
+		"MethodLabel": methodLabel(it.Method)})
 }
 
 func (a *App) serveSample(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	n, _ := strconv.Atoi(r.PathValue("n"))
 	it, err := getItem(a.db, id)
-	if err != nil || it.Sample == "" {
+	if err != nil || n < 0 || n >= len(it.Samples) {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", "audio/wav")
-	http.ServeFile(w, r, it.Sample)
+	http.ServeFile(w, r, it.Samples[n].Path)
 }
 
 func (a *App) organizeItems(lib int64) ([]*Item, map[int64]string) {
@@ -432,30 +439,97 @@ func (a *App) retryHandler(r *http.Request) (string, string) {
 	if err != nil {
 		return "/", "item not found"
 	}
+	if it.Kind == KindNotASet {
+		return "", "this folder is not a set, so it isn't recognized"
+	}
+	back := fmt.Sprintf("/item/%d", id)
 	switch r.FormValue("from") {
-	case "sample":
-		setStatus(a.db, id, StPendingSample, "")
-	case "transcript":
-		if it.Sample == "" {
-			return "", "no sample yet"
+	case "restart":
+		a.db.Exec(`DELETE FROM jobs WHERE item_id=?`, id)
+		a.db.Exec(`UPDATE items SET method='', samples='[]', transcript='', guess='{}', candidates='[]', score=0,
+			status=?, detail='starting over', attempts=0, next_at=0, updated=? WHERE id=?`, StPendingSample, now(), id)
+	case "text_search":
+		var keep []SampleInfo
+		for _, s := range it.Samples {
+			if s.Method != "text_search" {
+				keep = append(keep, s)
+			}
 		}
-		setStatus(a.db, id, StPendingTranscript, "")
+		a.db.Exec(`DELETE FROM jobs WHERE item_id=? AND method='text_search'`, id)
+		a.db.Exec(`UPDATE items SET method='text_search', samples=?, status=?, detail='text search requested', attempts=0, next_at=0, updated=? WHERE id=?`,
+			mustJSON(keep), StPendingSample, now(), id)
 	case "lookup":
-		if it.Transcript == "" {
-			return "", "no transcript yet"
+		g := Guess{Title: strings.TrimSpace(r.FormValue("title")), Author: strings.TrimSpace(r.FormValue("author")), Method: "manual"}
+		if g.Title == "" {
+			return "", "enter at least a title"
 		}
-		g := it.Guess
-		if t := strings.TrimSpace(r.FormValue("title")); t != "" || r.FormValue("author") != "" {
-			g = Guess{Title: t, Author: strings.TrimSpace(r.FormValue("author")), Narrator: g.Narrator, Series: g.Series, SeriesIndex: g.SeriesIndex, Method: "manual"}
-		}
-		if err := a.queueLookups(id, g, it.Transcript); err != nil {
+		it.Method = "announce"
+		if err := a.queueLookups(it, announceMethod{}, g, Query{Title: g.Title, Author: g.Author}); err != nil {
 			return "", err.Error()
 		}
-		a.poke()
 	default:
 		return "", "unknown step"
 	}
-	return fmt.Sprintf("/item/%d", id), "Queued again."
+	return back, "Queued."
+}
+
+func (a *App) settingsPage(w http.ResponseWriter, r *http.Request, render func(http.ResponseWriter, string, map[string]any)) {
+	var apis []map[string]any
+	s := a.settings()
+	for _, api := range a.apis {
+		apis = append(apis, map[string]any{"Name": api.Name, "Label": api.Label, "Limit": s.Limits[api.Name]})
+	}
+	render(w, "settings.html", map[string]any{"S": s, "APIList": apis, "Msg": r.URL.Query().Get("msg"),
+		"AnnounceCatalogs": methodCatalogs["announce"], "TextCatalogs": methodCatalogs["text_search"],
+		"HasLLM": a.cfg.OllamaURL != "", "LLMModel": a.cfg.OllamaModel})
+}
+
+func (a *App) settingsHandler(r *http.Request) (string, string) {
+	r.ParseForm()
+	num := func(k string) int { n, _ := strconv.Atoi(strings.TrimSpace(r.FormValue(k))); return n }
+	on := func(k string) bool { return r.FormValue(k) == "on" }
+	pick := func(k string, allowed []string) []string {
+		var out []string
+		for _, v := range r.Form[k] {
+			if contains1(allowed, v) {
+				out = append(out, v)
+			}
+		}
+		return out
+	}
+	s := a.settings()
+	s.Announce = AnnounceSettings{Enabled: on("a_enabled"), Start: num("a_start"), Seconds: num("a_seconds"), UseLLM: on("a_llm"),
+		Catalogs: pick("a_catalogs", methodCatalogs["announce"]), MatchPct: num("a_match"), ReviewPct: num("a_review")}
+	s.TextSearch = TextSearchSettings{Enabled: on("t_enabled"), Seconds: num("t_seconds"), MiddlePct: num("t_middle"),
+		ExtraSamples: num("t_extra"), MaxWords: num("t_words"), Catalogs: pick("t_catalogs", methodCatalogs["text_search"]), AcceptSingle: on("t_single")}
+	s.WhisperLanguage = strings.TrimSpace(r.FormValue("language"))
+	limits := map[string]string{}
+	for _, api := range a.apis {
+		limits[api.Name] = strings.ReplaceAll(r.FormValue("limit_"+api.Name), " ", "")
+	}
+	s.Limits = limits
+	if err := s.validate(); err != nil {
+		return "/settings", "Not saved: " + err.Error()
+	}
+	if err := saveSettings(a.db, s); err != nil {
+		return "/settings", err.Error()
+	}
+	a.applySettings(s)
+	return "/settings", "Saved. Changes apply to books from their next step on."
+}
+
+// applySettings makes new settings live, including API limits.
+func (a *App) applySettings(s Settings) {
+	a.mu.Lock()
+	a.cur = s
+	a.mu.Unlock()
+	for _, api := range a.apis {
+		if spec, ok := s.Limits[api.Name]; ok && spec != "" {
+			if m, err := parseLimits(api.Name + "=" + spec); err == nil {
+				a.limiter.SetWindows(api.Name, m[api.Name])
+			}
+		}
+	}
 }
 
 func (a *App) organizeHandler(r *http.Request) (string, string) {
@@ -532,4 +606,11 @@ func (a *App) rescanLoop(ctx context.Context, every time.Duration) {
 		case <-time.After(every):
 		}
 	}
+}
+
+func methodLabel(name string) string {
+	if m := methodByName(name); m != nil {
+		return m.Label()
+	}
+	return ""
 }

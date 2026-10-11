@@ -6,25 +6,30 @@
   <p><span class="pill {{$it.Status}}">{{label $it.Status}}</span> {{$it.Detail}}
      {{if $it.Reason}}<br><span class="mut">{{$it.Reason}}</span>{{end}}</p>
   <p>{{if eq $it.Kind "set"}}Set of {{$it.Total}} files, part 1 is <b>{{index $it.Files 0}}</b>.{{else if eq $it.Kind "single"}}Single file <b>{{index $it.Files 0}}</b>.{{else}}{{len $it.Files}} audio files that are not a set.{{end}} {{mb $it.Bytes}}</p>
-  {{if $it.Sample}}<audio controls preload="none" src="/sample/{{$it.ID}}"></audio>{{end}}
+  {{if $it.Method}}<p><small>Current method: <b>{{method $it.Method}}</b></small></p>{{end}}
 </div>
 
 <div class="grid2">
 <div class="card">
   <h3 style="margin-top:0">Heard</h3>
-  {{if $it.Transcript}}<p>“{{$it.Transcript}}”</p>{{else}}<p class="mut">No transcript yet.</p>{{end}}
+  {{range $n, $s := $it.Samples}}
+  <div style="margin-bottom:12px">
+    <small><b>{{method .Method}}</b> · {{.File}} at {{secs .Offset}} for {{.Seconds}} s</small><br>
+    <audio controls preload="none" src="/sample/{{$it.ID}}/{{$n}}" style="height:32px"></audio><br>
+    {{if .Text}}“{{.Text}}”{{else}}<span class="mut">not transcribed yet</span>{{end}}
+  </div>
+  {{else}}<p class="mut">No samples yet.</p>{{end}}
   {{with $it.Guess}}{{if or .Title .Author}}
-  <p><small>Read from the transcript ({{.Method}}):</small><br>
+  <p><small>Announcement read as ({{.Method}}):</small><br>
     {{if .Title}}Title: <b>{{.Title}}</b><br>{{end}}{{if .Author}}Author: <b>{{.Author}}</b><br>{{end}}
     {{if .Narrator}}Narrator: {{.Narrator}}<br>{{end}}{{if .Series}}Series: {{.Series}} {{.SeriesIndex}}{{end}}</p>
   {{end}}{{end}}
   {{if ne $it.Kind "not_a_set"}}
-  <form method="post" action="/item/{{$it.ID}}/retry" class="inline"><input type="hidden" name="token" value="{{.Token}}"><input type="hidden" name="from" value="sample"><button>Redo sample + transcript</button></form>
-  {{end}}
-  {{if $it.Transcript}}
+  <form method="post" action="/item/{{$it.ID}}/retry" class="inline"><input type="hidden" name="token" value="{{.Token}}"><input type="hidden" name="from" value="restart"><button>Start over</button></form>
+  <form method="post" action="/item/{{$it.ID}}/retry" class="inline"><input type="hidden" name="token" value="{{.Token}}"><input type="hidden" name="from" value="text_search"><button>Run text search</button></form>
   <form method="post" action="/item/{{$it.ID}}/retry" style="margin-top:8px">
     <input type="hidden" name="token" value="{{.Token}}"><input type="hidden" name="from" value="lookup">
-    <small>Search the catalogs again, optionally with your own words:</small><br>
+    <small>Or search the catalogs for a title you type:</small><br>
     <input type="text" name="title" placeholder="title" value="{{$it.Guess.Title}}">
     <input type="text" name="author" placeholder="author" value="{{$it.Guess.Author}}">
     <button>Queue search</button>

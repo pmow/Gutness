@@ -1,5 +1,5 @@
 {{template "top" .}}
-<p class="mut">Each recognized transcript queues one search per catalog. Searches go out in the background only as fast as each catalog's limits allow; when a catalog says to slow down, its queue pauses until the timer above runs out.</p>
+<p class="mut">Each method queues one search per catalog it uses. Searches go out in the background only as fast as each catalog's limits allow; when a catalog says to slow down, its queue pauses until the timer above runs out.</p>
 <div class="tabs">
   {{range .JobFilters}}<a href="/queue{{qs "status" . "api" $.API}}" class="{{if eq . $.JobStatus}}on{{end}}">{{.}} ({{index $.JobCounts .}})</a>{{end}}
 </div>
@@ -8,18 +8,18 @@
   {{range .APIs}}<a href="/queue{{qs "status" $.JobStatus "api" .Name}}" class="{{if eq .Name $.API}}on{{end}}">{{.Label}}</a>{{end}}
 </div>
 <div class="wrap"><table>
-<tr><th>#</th><th>Catalog</th><th>Book folder</th><th>Search</th><th>Status</th><th>Tries</th><th>Updated</th></tr>
+<tr><th>#</th><th>Catalog</th><th>Method</th><th>Book folder</th><th>Search</th><th>Status</th><th>Tries</th><th>Updated</th></tr>
 {{range .Jobs}}
 <tr>
-  <td>{{.ID}}</td><td>{{.API}}</td>
+  <td>{{.ID}}</td><td>{{.API}}</td><td><small>{{method .Method}}{{if gt .Round 1}} (sample {{.Round}}){{end}}</small></td>
   <td class="path"><a href="/item/{{.ItemID}}">{{short .Folder 80}}</a></td>
-  <td>{{if .Query.Title}}<b>{{.Query.Title}}</b>{{if .Query.Author}} by {{.Query.Author}}{{end}}{{else}}<small>“{{.Query.Keywords}}”</small>{{end}}</td>
+  <td>{{if .Query.Title}}<b>{{.Query.Title}}</b>{{if .Query.Author}} by {{.Query.Author}}{{end}}{{else if .Query.FullText}}<small>text: “{{short .Query.FullText 120}}”</small>{{else}}<small>“{{.Query.Keywords}}”</small>{{end}}</td>
   <td><span class="pill">{{.Status}}</span>{{if eq .Status "done"}} <small>{{.Results}} results</small>{{end}}
       {{if and (eq .Status "queued") (gt .NextAt $.NowUnix)}}<br><small>retry after backoff</small>{{end}}
       {{if .Error}}<br><small>{{short .Error 140}}</small>{{end}}</td>
   <td>{{.Attempts}}</td><td><small>{{ago .Updated}}</small></td>
 </tr>
-{{else}}<tr><td colspan="7" class="mut">No searches in this view.</td></tr>{{end}}
+{{else}}<tr><td colspan="8" class="mut">No searches in this view.</td></tr>{{end}}
 </table></div>
 <small>Showing up to 500.</small>
 {{template "bottom" .}}

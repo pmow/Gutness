@@ -83,14 +83,13 @@ func ScoreCandidates(g Guess, transcript string, cs []Candidate) []Candidate {
 			c.Score = min(1, c.Score+0.03) // carries narrator and series details
 		}
 	}
-	sort.SliceStable(cs, func(i, j int) bool { return cs[i].Score > cs[j].Score })
+	sortByScore(cs)
 	return cs
 }
 
-const (
-	matchThreshold  = 0.8
-	reviewThreshold = 0.45
-)
+func sortByScore(cs []Candidate) {
+	sort.SliceStable(cs, func(i, j int) bool { return cs[i].Score > cs[j].Score })
+}
 
 // nameKey compares titles ignoring case, punctuation and small words.
 func nameKey(s string) string { return strings.Join(tokens(s), " ") }

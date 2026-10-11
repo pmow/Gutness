@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -14,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -41,32 +41,26 @@ type Config struct {
 	Limits        string
 }
 
-// ExtractSample cuts SampleSeconds of 16 kHz mono audio from the first file,
-// the format Whisper works on natively.
-func ExtractSample(ctx context.Context, cfg Config, it *Item) (string, error) {
-	if len(it.Files) == 0 {
-		return "", errors.New("item has no files")
+// ExtractSample cuts seconds of audio starting at offset from src, as
+// 16 kHz mono WAV, the format Whisper works on natively.
+func ExtractSample(ctx context.Context, src string, offset float64, seconds int, out string) error {
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return err
 	}
-	src := filepath.Join(it.Folder, it.Files[0])
-	dir := filepath.Join(cfg.DataDir, "samples")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
-	}
-	out := filepath.Join(dir, fmt.Sprintf("%d.wav", it.ID))
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-		"-ss", fmt.Sprint(cfg.SampleStart), "-t", fmt.Sprint(cfg.SampleSeconds), "-i", src,
+		"-ss", strconv.FormatFloat(offset, 'f', 2, 64), "-t", strconv.Itoa(seconds), "-i", src,
 		"-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", out)
 	if msg, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("ffmpeg could not read %s: %s", it.Files[0], strings.TrimSpace(string(msg)))
+		return fmt.Errorf("ffmpeg could not read %s: %s", filepath.Base(src), strings.TrimSpace(string(msg)))
 	}
 	if st, err := os.Stat(out); err != nil || st.Size() < 1000 {
-		return "", fmt.Errorf("ffmpeg produced no audio from %s", it.Files[0])
+		return fmt.Errorf("ffmpeg produced no audio from %s at %.0fs", filepath.Base(src), offset)
 	}
-	return out, nil
+	return nil
 }
 
 // Transcribe sends a sample to an openai-whisper-asr-webservice container.
-func Transcribe(ctx context.Context, cfg Config, wav string) (string, error) {
+func Transcribe(ctx context.Context, cfg Config, lang, wav string) (string, error) {
 	f, err := os.Open(wav)
 	if err != nil {
 		return "", err
@@ -80,8 +74,8 @@ func Transcribe(ctx context.Context, cfg Config, wav string) (string, error) {
 	}
 	mw.Close()
 	q := url.Values{"task": {"transcribe"}, "output": {"json"}, "encode": {"true"}}
-	if cfg.WhisperLang != "" {
-		q.Set("language", cfg.WhisperLang)
+	if lang != "" {
+		q.Set("language", lang)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
@@ -176,6 +170,7 @@ var (
 	bookNRe        = regexp.MustCompile(`(?i)\bbook\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:of|in)\s+(?:the\s+)?(.{2,60}?)(?:[,.]|$)`)
 	sentenceRe     = regexp.MustCompile(`[.!?]+\s+`)
 	narratorLeadRe = regexp.MustCompile(`(?i)(narrated|read|performed)$`)
+	presentsRe     = regexp.MustCompile(`(?i)^.*?\bpresents\b\s*[:,.-]?\s*`)
 	introRe        = regexp.MustCompile(`(?i)^(this is audible|audible (studios )?presents|.*\bpresents)$`)
 )
 
@@ -200,7 +195,11 @@ func heuristicGuess(t string) Guess {
 			kept = append(kept, sent)
 		}
 		if len(kept) > 0 {
+			// "Penguin Random House presents: The Title" -> "The Title"
 			g.Title = kept[len(kept)-1]
+			if t := strings.Trim(presentsRe.ReplaceAllString(g.Title, ""), " ,.:\"'"); t != "" {
+				g.Title = t
+			}
 		}
 		break
 	}

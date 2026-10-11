@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 	updated INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(api, status, next_at);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS api_calls (api TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS api_calls_idx ON api_calls(api, at);
 CREATE TABLE IF NOT EXISTS api_state (
@@ -98,6 +99,22 @@ func OpenDB(path string) (*sql.DB, error) {
 	db.SetMaxOpenConns(1) // one writer; keeps SQLite simple and safe
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("init database: %w", err)
+	}
+	// Columns added after the first release.
+	for _, m := range []struct{ table, col, def string }{
+		{"items", "method", "TEXT NOT NULL DEFAULT ''"},
+		{"items", "samples", "TEXT NOT NULL DEFAULT '[]'"},
+		{"items", "durations", "TEXT NOT NULL DEFAULT '[]'"},
+		{"jobs", "method", "TEXT NOT NULL DEFAULT ''"},
+		{"jobs", "round", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		var n int
+		db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, m.table, m.col).Scan(&n)
+		if n == 0 {
+			if _, err := db.Exec(`ALTER TABLE ` + m.table + ` ADD COLUMN ` + m.col + ` ` + m.def); err != nil {
+				return nil, fmt.Errorf("migrate %s.%s: %w", m.table, m.col, err)
+			}
+		}
 	}
 	return db, nil
 }
@@ -150,26 +167,33 @@ type Item struct {
 	Author, Title, Series, SeriesIndex, Narrator, Year string
 	Source                                             string
 	Missing                                            bool
+	Method                                             string
+	Samples                                            []SampleInfo
+	Durations                                          []float64
 	Created, Updated                                   int64
 }
 
 const itemCols = `id, library_id, folder, kind, total, files, bytes, reason, status, detail, attempts, next_at,
-	sample, transcript, guess, candidates, score, author, title, series, series_index, narrator, year, source, missing, created, updated`
+	sample, transcript, guess, candidates, score, author, title, series, series_index, narrator, year, source, missing, created, updated,
+	method, samples, durations`
 
 type scanner interface{ Scan(...any) error }
 
 func scanItem(r scanner) (*Item, error) {
 	var it Item
-	var files, guess, cands string
+	var files, guess, cands, samples, durs string
 	err := r.Scan(&it.ID, &it.LibraryID, &it.Folder, &it.Kind, &it.Total, &files, &it.Bytes, &it.Reason, &it.Status,
 		&it.Detail, &it.Attempts, &it.NextAt, &it.Sample, &it.Transcript, &guess, &cands, &it.Score, &it.Author,
-		&it.Title, &it.Series, &it.SeriesIndex, &it.Narrator, &it.Year, &it.Source, &it.Missing, &it.Created, &it.Updated)
+		&it.Title, &it.Series, &it.SeriesIndex, &it.Narrator, &it.Year, &it.Source, &it.Missing, &it.Created, &it.Updated,
+		&it.Method, &samples, &durs)
 	if err != nil {
 		return nil, err
 	}
 	json.Unmarshal([]byte(files), &it.Files)
 	json.Unmarshal([]byte(guess), &it.Guess)
 	json.Unmarshal([]byte(cands), &it.Candidates)
+	json.Unmarshal([]byte(samples), &it.Samples)
+	json.Unmarshal([]byte(durs), &it.Durations)
 	return &it, nil
 }
 

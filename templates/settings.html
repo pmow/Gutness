@@ -1,0 +1,49 @@
+{{template "top" .}}
+<form method="post" action="/settings">
+<input type="hidden" name="token" value="{{.Token}}">
+<p class="mut">Recognition methods run in this order. When one can't identify a book, the next one takes over. Changes apply to each book from its next step.</p>
+
+<fieldset><legend>1. Title announcement</legend>
+  <p class="mut" style="margin-top:0">Listens to the opening of part 1 for “[Someone presents:] The Title, by Author[, read by Narrator]”. Title and author are the minimum; the “presents” part and the narrator are optional. Then looks the title up in book catalogs.</p>
+  <div class="row check"><label><input type="checkbox" name="a_enabled" {{if .S.Announce.Enabled}}checked{{end}}> Enabled</label></div>
+  <div class="row">
+    <label>Start at (seconds)<input type="number" name="a_start" min="0" value="{{.S.Announce.Start}}"></label>
+    <label>Listen for (seconds)<input type="number" name="a_seconds" min="5" max="120" value="{{.S.Announce.Seconds}}"></label>
+    <label>Match at score (%)<input type="number" name="a_match" min="0" max="100" value="{{.S.Announce.MatchPct}}"></label>
+    <label>Show for review from (%)<input type="number" name="a_review" min="0" max="100" value="{{.S.Announce.ReviewPct}}"></label>
+  </div>
+  <div class="row check">Catalogs:
+    {{range .AnnounceCatalogs}}<label><input type="checkbox" name="a_catalogs" value="{{.}}" {{if has $.S.Announce.Catalogs .}}checked{{end}}> {{.}}</label>{{end}}
+  </div>
+  <div class="row check"><label><input type="checkbox" name="a_llm" {{if .S.Announce.UseLLM}}checked{{end}} {{if not .HasLLM}}disabled{{end}}>
+    Ask the LLM when the pattern doesn't find a title and author {{if .HasLLM}}<small>({{.LLMModel}})</small>{{else}}<small>(no LLM configured)</small>{{end}}</label></div>
+</fieldset>
+
+<fieldset><legend>2. Text search</legend>
+  <p class="mut" style="margin-top:0">Transcribes a random stretch from the middle of the set and searches catalogs that index the text inside books. If two or more books come back, it listens to another random stretch and searches with all the words heard so far.</p>
+  <div class="row check"><label><input type="checkbox" name="t_enabled" {{if .S.TextSearch.Enabled}}checked{{end}}> Enabled</label></div>
+  <div class="row">
+    <label>Sample length (seconds)<input type="number" name="t_seconds" min="5" max="120" value="{{.S.TextSearch.Seconds}}"></label>
+    <label>Pick from the middle (%)<input type="number" name="t_middle" min="10" max="100" value="{{.S.TextSearch.MiddlePct}}"></label>
+    <label>Extra samples if 2+ books match<input type="number" name="t_extra" min="0" max="5" value="{{.S.TextSearch.ExtraSamples}}"></label>
+    <label>Max words per search<input type="number" name="t_words" min="10" value="{{.S.TextSearch.MaxWords}}"></label>
+  </div>
+  <div class="row check">Catalogs:
+    {{range .TextCatalogs}}<label><input type="checkbox" name="t_catalogs" value="{{.}}" {{if has $.S.TextSearch.Catalogs .}}checked{{end}}> {{.}}</label>{{end}}
+  </div>
+  <div class="row check"><label><input type="checkbox" name="t_single" {{if .S.TextSearch.AcceptSingle}}checked{{end}}> Count a single book found as matched (otherwise ask me to confirm)</label></div>
+</fieldset>
+
+<fieldset><legend>Catalog limits</legend>
+  <p class="mut" style="margin-top:0">Requests allowed per period, comma-separated, e.g. <code>1/2s,300/1h</code>. Searches wait in the queue until a slot is free. Units: s, m, h.</p>
+  <div class="row">
+    {{range .APIList}}<label>{{.Label}}<input type="text" name="limit_{{.Name}}" value="{{.Limit}}"></label>{{end}}
+  </div>
+</fieldset>
+
+<fieldset><legend>Speech</legend>
+  <div class="row"><label>Whisper language (blank = detect)<input type="text" name="language" value="{{.S.WhisperLanguage}}" size="6"></label></div>
+</fieldset>
+<button class="primary">Save settings</button>
+</form>
+{{template "bottom" .}}
