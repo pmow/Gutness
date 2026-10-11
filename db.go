@@ -106,6 +106,11 @@ func OpenDB(path string) (*sql.DB, error) {
 		{"items", "samples", "TEXT NOT NULL DEFAULT '[]'"},
 		{"items", "durations", "TEXT NOT NULL DEFAULT '[]'"},
 		{"items", "path_match", "TEXT NOT NULL DEFAULT '{}'"},
+		{"items", "priority", "INTEGER NOT NULL DEFAULT 0"},
+		{"items", "asin", "TEXT NOT NULL DEFAULT ''"},
+		{"items", "isbn", "TEXT NOT NULL DEFAULT ''"},
+		{"items", "link", "TEXT NOT NULL DEFAULT ''"},
+		{"items", "found_by", "TEXT NOT NULL DEFAULT ''"},
 		{"jobs", "method", "TEXT NOT NULL DEFAULT ''"},
 		{"jobs", "round", "INTEGER NOT NULL DEFAULT 0"},
 	} {
@@ -149,6 +154,8 @@ type Candidate struct {
 	Series      string   `json:"series,omitempty"`
 	SeriesIndex string   `json:"series_index,omitempty"`
 	Year        string   `json:"year,omitempty"`
+	ASIN        string   `json:"asin,omitempty"`
+	ISBN        string   `json:"isbn,omitempty"`
 	Score       float64  `json:"score"`
 }
 
@@ -172,12 +179,14 @@ type Item struct {
 	Samples                                            []SampleInfo
 	Durations                                          []float64
 	PathMatch                                          PathMatch
+	Priority                                           int64
+	ASIN, ISBN, Link, FoundBy                          string
 	Created, Updated                                   int64
 }
 
 const itemCols = `id, library_id, folder, kind, total, files, bytes, reason, status, detail, attempts, next_at,
 	sample, transcript, guess, candidates, score, author, title, series, series_index, narrator, year, source, missing, created, updated,
-	method, samples, durations, path_match`
+	method, samples, durations, path_match, priority, asin, isbn, link, found_by`
 
 type scanner interface{ Scan(...any) error }
 
@@ -187,7 +196,7 @@ func scanItem(r scanner) (*Item, error) {
 	err := r.Scan(&it.ID, &it.LibraryID, &it.Folder, &it.Kind, &it.Total, &files, &it.Bytes, &it.Reason, &it.Status,
 		&it.Detail, &it.Attempts, &it.NextAt, &it.Sample, &it.Transcript, &guess, &cands, &it.Score, &it.Author,
 		&it.Title, &it.Series, &it.SeriesIndex, &it.Narrator, &it.Year, &it.Source, &it.Missing, &it.Created, &it.Updated,
-		&it.Method, &samples, &durs, &pm)
+		&it.Method, &samples, &durs, &pm, &it.Priority, &it.ASIN, &it.ISBN, &it.Link, &it.FoundBy)
 	if err != nil {
 		return nil, err
 	}

@@ -318,7 +318,7 @@ func audibleSearch(region string) func(context.Context, Query) ([]Candidate, err
 		}
 		var cs []Candidate
 		for _, p := range out.Products {
-			c := Candidate{API: "audible", ID: p.ASIN, URL: "https://www.audible." + region + "/pd/" + p.ASIN, Title: p.Title, Subtitle: p.Subtitle}
+			c := Candidate{API: "audible", ID: p.ASIN, ASIN: p.ASIN, URL: "https://www.audible." + region + "/pd/" + p.ASIN, Title: p.Title, Subtitle: p.Subtitle}
 			for _, a := range p.Authors {
 				c.Authors = append(c.Authors, a.Name)
 			}
@@ -341,7 +341,7 @@ func openLibrarySearch(ctx context.Context, q Query) ([]Candidate, error) {
 	if q.FullText != "" {
 		return openLibraryInside(ctx, q.FullText)
 	}
-	v := url.Values{"limit": {"5"}, "fields": {"key,title,subtitle,author_name,first_publish_year"}}
+	v := url.Values{"limit": {"5"}, "fields": {"key,title,subtitle,author_name,first_publish_year,isbn"}}
 	if q.Title != "" {
 		v.Set("title", q.Title)
 		if q.Author != "" {
@@ -355,6 +355,7 @@ func openLibrarySearch(ctx context.Context, q Query) ([]Candidate, error) {
 			Key, Title, Subtitle string
 			AuthorName           []string `json:"author_name"`
 			Year                 int      `json:"first_publish_year"`
+			ISBN                 []string `json:"isbn"`
 		}
 	}
 	if err := getJSON(ctx, env("OPENLIBRARY_BASE_URL", "https://openlibrary.org")+"/search.json?"+v.Encode(), &out); err != nil {
@@ -362,7 +363,7 @@ func openLibrarySearch(ctx context.Context, q Query) ([]Candidate, error) {
 	}
 	var cs []Candidate
 	for _, d := range out.Docs {
-		c := Candidate{API: "openlibrary", ID: d.Key, URL: "https://openlibrary.org" + d.Key, Title: d.Title, Subtitle: d.Subtitle, Authors: d.AuthorName}
+		c := Candidate{API: "openlibrary", ID: d.Key, URL: "https://openlibrary.org" + d.Key, Title: d.Title, Subtitle: d.Subtitle, Authors: d.AuthorName, ISBN: pickISBN(d.ISBN)}
 		if d.Year > 0 {
 			c.Year = strconv.Itoa(d.Year)
 		}
@@ -395,6 +396,7 @@ func googleBooksSearch(key string) func(context.Context, Query) ([]Candidate, er
 				VolumeInfo struct {
 					Title, Subtitle, PublishedDate string
 					Authors                        []string
+					IndustryIdentifiers            []struct{ Type, Identifier string }
 				}
 			}
 		}
@@ -405,6 +407,13 @@ func googleBooksSearch(key string) func(context.Context, Query) ([]Candidate, er
 		for _, it := range out.Items {
 			vi := it.VolumeInfo
 			c := Candidate{API: "googlebooks", ID: it.ID, URL: "https://books.google.com/books?id=" + it.ID, Title: vi.Title, Subtitle: vi.Subtitle, Authors: vi.Authors}
+			var ids []string
+			for _, x := range vi.IndustryIdentifiers {
+				if strings.HasPrefix(x.Type, "ISBN") {
+					ids = append(ids, x.Identifier)
+				}
+			}
+			c.ISBN = pickISBN(ids)
 			if len(vi.PublishedDate) >= 4 {
 				c.Year = vi.PublishedDate[:4]
 			}
@@ -476,4 +485,17 @@ func (l *Limiter) Windows(api string) []Window {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.windows[api]
+}
+
+// pickISBN prefers a 13-digit ISBN.
+func pickISBN(ids []string) string {
+	for _, id := range ids {
+		if len(id) == 13 {
+			return id
+		}
+	}
+	if len(ids) > 0 {
+		return ids[0]
+	}
+	return ""
 }

@@ -13,8 +13,9 @@ main { max-width:1280px; margin:0 auto; padding:16px; }
 a { color:var(--acc); }
 header.top { display:flex; flex-wrap:wrap; gap:6px 18px; align-items:baseline; margin-bottom:12px; }
 header.top h1 { font-size:19px; margin:0 8px 0 0; }
-header.top nav a { margin-right:14px; text-decoration:none; }
-header.top nav a.on { color:var(--fg); font-weight:600; }
+header.top nav { display:flex; gap:4px; flex-wrap:wrap; }
+header.top nav a { padding:6px 14px; border-radius:8px 8px 0 0; border:1px solid transparent; border-bottom:2px solid transparent; text-decoration:none; }
+header.top nav a.on { color:var(--fg); font-weight:600; border-bottom-color:var(--acc); background:var(--card); }
 .bar { display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:10px; margin-bottom:14px; }
 .svc { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; }
 .svc b { font-size:14px; }
@@ -40,6 +41,14 @@ td.path { font-family:ui-monospace, monospace; font-size:12px; word-break:break-
 .pill.error, .pill.no_match { color:var(--bad); border-color:var(--bad); }
 .wrap { overflow-x:auto; }
 .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
+th.sort { cursor:pointer; user-select:none; white-space:nowrap; }
+th.sort::after { content:" ↕"; color:var(--line); }
+th.sort.asc::after { content:" ↑"; color:var(--acc); } th.sort.desc::after { content:" ↓"; color:var(--acc); }
+tr.filters th { padding:4px 6px; } tr.filters input, tr.filters select { width:100%; min-width:60px; font-size:12px; padding:3px 5px; }
+details summary { cursor:pointer; color:var(--acc); font-size:12px; }
+details ol { margin:4px 0 0; padding-left:22px; font-family:ui-monospace, monospace; font-size:11px; max-height:240px; overflow:auto; }
+.yes { color:var(--ok); font-weight:600; } .no { color:var(--bad); font-weight:600; }
+.folder b { display:block; } .folder small { display:block; }
 fieldset { border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin:0 0 12px; background:var(--card); }
 legend { font-weight:600; padding:0 6px; }
 .row { display:flex; flex-wrap:wrap; gap:8px 18px; align-items:flex-end; margin:8px 0; }
@@ -53,9 +62,9 @@ legend { font-weight:600; padding:0 6px; }
 <header class="top">
   <h1>Aural Organizer</h1>
   <nav>
-    <a href="/" class="{{if eq .Page_ "list"}}on{{end}}">Books</a>
-    <a href="/queue" class="{{if eq .Page_ "queue"}}on{{end}}">Lookup queue</a>
-    <a href="/organize" class="{{if eq .Page_ "organize"}}on{{end}}">Organize (final step)</a>
+    <a href="/queue" class="{{if eq .Page_ "queue"}}on{{end}}">Queue</a>
+    <a href="/completed" class="{{if eq .Page_ "completed"}}on{{end}}">Completed</a>
+    <a href="/all" class="{{if eq .Page_ "all"}}on{{end}}">All</a>
     <a href="/settings" class="{{if eq .Page_ "settings"}}on{{end}}">Settings</a>
   </nav>
   <label class="mut"><input type="checkbox" id="live" checked> live updates</label>
@@ -87,7 +96,7 @@ function render() {
       : `<span class="state ok">Ready</span>`;
     h += `<div class="svc"><b>${esc(a.Label)}</b><br>${state}<br>
       <span class="mut">${a.Usage.map(esc).join(" · ")}</span><br>
-      <a href="/queue?api=${a.Name}">${a.Queued} queued</a>${a.Running ? ` · ${a.Running} running` : ""}${a.Failed ? ` · <a href="/queue?api=${a.Name}&status=failed">${a.Failed} failed</a>` : ""}
+      <a href="/lookups?api=${a.Name}">${a.Queued} queued</a>${a.Running ? ` · ${a.Running} running` : ""}${a.Failed ? ` · <a href="/lookups?api=${a.Name}&status=failed">${a.Failed} failed</a>` : ""}
       ${a.LastError ? `<br><span class="state bad" title="${esc(a.LastError)}">Last error: ${esc(a.LastError.slice(0, 80))}</span>` : ""}</div>`;
   }
   document.getElementById("bar").innerHTML = h;

@@ -69,7 +69,14 @@ func (a *App) templates() *template.Template {
 		"pending": func(s string) bool { return strings.HasPrefix(s, "pending_") },
 		"method":  methodLabel,
 		"has":     contains1,
-		"secs":    func(f float64) string { return fmt.Sprintf("%d:%02d", int(f)/60, int(f)%60) },
+		"statusOptions": func() []string {
+			var out []string
+			for _, s := range append(append([]string{}, queueStages...), StMatched, StOrganized, StNotASet) {
+				out = append(out, statusLabels[s])
+			}
+			return out
+		},
+		"secs": func(f float64) string { return fmt.Sprintf("%d:%02d", int(f)/60, int(f)%60) },
 	}).ParseFS(templateFS, "templates/*.html"))
 }
 
@@ -116,15 +123,25 @@ func (a *App) Routes() http.Handler {
 		data["Token"] = a.token
 		data["Status"] = a.statusSnapshot()
 		data["Libraries"] = listLibraries(a.db)
-		data["Page_"] = strings.TrimSuffix(name, ".html")
-		data["Reload_"] = name == "list.html" || name == "queue.html"
+		if _, ok := data["Page_"]; !ok {
+			data["Page_"] = strings.TrimSuffix(name, ".html")
+		}
+		data["Reload_"] = name == "queue.html" || name == "lookups.html"
 		if err := t.ExecuteTemplate(w, name, data); err != nil {
 			log.Printf("render %s: %v", name, err)
 		}
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { a.listPage(w, r, render) })
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/queue?"+r.URL.RawQuery, http.StatusFound)
+	})
 	mux.HandleFunc("GET /queue", func(w http.ResponseWriter, r *http.Request) { a.queuePage(w, r, render) })
+	mux.HandleFunc("GET /completed", func(w http.ResponseWriter, r *http.Request) { a.tablePage(w, r, render, "completed") })
+	mux.HandleFunc("GET /all", func(w http.ResponseWriter, r *http.Request) { a.tablePage(w, r, render, "all") })
+	mux.HandleFunc("GET /lookups", func(w http.ResponseWriter, r *http.Request) { a.lookupsPage(w, r, render) })
+	mux.HandleFunc("POST /scan", a.post(a.scanAllHandler))
+	mux.HandleFunc("POST /item/{id}/top", a.post(a.topHandler))
+	mux.HandleFunc("POST /libraries/{id}/remove", a.post(a.removeLibraryHandler))
 	mux.HandleFunc("GET /item/{id}", func(w http.ResponseWriter, r *http.Request) { a.itemPage(w, r, render) })
 	mux.HandleFunc("GET /organize", func(w http.ResponseWriter, r *http.Request) { a.organizePage(w, r, render) })
 	mux.HandleFunc("GET /sample/{id}/{n}", a.serveSample)
@@ -160,11 +177,17 @@ func (a *App) post(h func(r *http.Request) (back, msg string)) http.HandlerFunc 
 			back = "/"
 		}
 		if msg != "" {
+			back, frag, _ := strings.Cut(back, "#")
 			sep := "?"
 			if strings.Contains(back, "?") {
 				sep = "&"
 			}
 			back += sep + "msg=" + url.QueryEscape(msg)
+			if frag != "" {
+				back += "#" + frag
+			}
+			http.Redirect(w, r, back, http.StatusSeeOther)
+			return
 		}
 		http.Redirect(w, r, back, http.StatusSeeOther)
 	}
@@ -233,32 +256,7 @@ func (a *App) statusSnapshot() StatusSnapshot {
 
 const pageSize = 100
 
-func (a *App) listPage(w http.ResponseWriter, r *http.Request, render func(http.ResponseWriter, string, map[string]any)) {
-	q := r.URL.Query()
-	f := ItemFilter{Status: q.Get("status"), Query: q.Get("q"), Limit: pageSize}
-	if f.Status == "" {
-		f.Status = "pending"
-	}
-	f.LibraryID, _ = strconv.ParseInt(q.Get("lib"), 10, 64)
-	page, _ := strconv.Atoi(q.Get("page"))
-	f.Offset = max(page, 0) * pageSize
-	items, total, err := listItems(a.db, f)
-	msg := q.Get("msg")
-	if err != nil {
-		msg = err.Error()
-	}
-	libRoots := map[int64]string{}
-	for _, l := range listLibraries(a.db) {
-		libRoots[l.ID] = l.Path
-	}
-	render(w, "list.html", map[string]any{
-		"Items": items, "Total": total, "Filter": f, "Page": page, "PageSize": pageSize,
-		"Filters": filterOrder, "Counts": statusCounts(a.db, f.LibraryID), "Msg": msg, "Roots": libRoots,
-		"HasMore": f.Offset+len(items) < total,
-	})
-}
-
-func (a *App) queuePage(w http.ResponseWriter, r *http.Request, render func(http.ResponseWriter, string, map[string]any)) {
+func (a *App) lookupsPage(w http.ResponseWriter, r *http.Request, render func(http.ResponseWriter, string, map[string]any)) {
 	q := r.URL.Query()
 	st, api := q.Get("status"), q.Get("api")
 	if st == "" {
@@ -299,7 +297,7 @@ func (a *App) queuePage(w http.ResponseWriter, r *http.Request, render func(http
 		}
 		cr.Close()
 	}
-	render(w, "queue.html", map[string]any{"Jobs": jobs, "JobStatus": st, "API": api, "APIs": a.apis,
+	render(w, "lookups.html", map[string]any{"Jobs": jobs, "JobStatus": st, "API": api, "APIs": a.apis,
 		"JobCounts": counts, "JobFilters": []string{"queued", "running", "failed", "done", "all"}, "Msg": q.Get("msg"), "NowUnix": now()})
 }
 
@@ -368,7 +366,7 @@ func (a *App) addLibraryHandler(r *http.Request) (string, string) {
 		return "", err.Error()
 	}
 	a.scanAsync(id)
-	return "/" + qs("lib", id, "status", "all"), "Library added; scanning it now."
+	return "/settings#libraries", "Library added; scanning it now."
 }
 
 func (a *App) scanHandler(r *http.Request) (string, string) {
@@ -430,7 +428,7 @@ func (a *App) editHandler(r *http.Request) (string, string) {
 	if f("author") == "" || f("title") == "" {
 		return "", "author and title are both needed"
 	}
-	_, err := a.db.Exec(`UPDATE items SET author=?, title=?, series=?, series_index=?, narrator=?, status=?, detail=?, source='manual', updated=? WHERE id=?`,
+	_, err := a.db.Exec(`UPDATE items SET author=?, title=?, series=?, series_index=?, narrator=?, status=?, detail=?, source='manual', found_by='Entered by you', updated=? WHERE id=?`,
 		f("author"), f("title"), f("series"), f("series_index"), f("narrator"), StMatched, "entered by you", now(), id)
 	if err != nil {
 		return "", err.Error()
@@ -687,7 +685,7 @@ func (a *App) usePathHandler(r *http.Request) (string, string) {
 		return "", "the path rule did not give both an author and a title"
 	}
 	_, err = a.db.Exec(`UPDATE items SET status=?, detail=?, author=?, title=?, series=?, series_index=?, narrator=?, year=?,
-		source='path', updated=? WHERE id=?`, StMatched, "from path rule \""+pm.Rule+"\"",
+		source='path', found_by='Path rule', updated=? WHERE id=?`, StMatched, "from path rule \""+pm.Rule+"\"",
 		pm.Author, pm.Title, pm.Series, pm.SeriesIndex, pm.Narrator, pm.Year, now(), id)
 	if err != nil {
 		return "", err.Error()

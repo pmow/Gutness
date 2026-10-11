@@ -52,27 +52,36 @@ and an optional LLM (Ollama), all from `docker-compose.yml`. Web UI on port **80
    `Author/Series/Vol N - Title` or `Author/Title` inside their library.
    Preview first, never overwrites, held on any conflict, undo from a journal.
 
-## Settings page
-
-Everything about the two methods (on/off, sample start and length, middle
-percentage, extra samples, words per search, which catalogs, score
-thresholds, whether to use the LLM, whether a single text-search hit counts
-as a match), the catalog limits and the Whisper language. Saved in the
-database and applied immediately.
-
 ## Web UI
 
-- Top bar on every page: Whisper and LLM status, and for each catalog its
-  state, a live countdown until it may be called again, usage against each
-  limit, and its queue size.
-- **Books**: filter tabs with counts (defaults to *Pending recognition*),
-  library picker and search across folder, title, author and transcript.
-- **Lookup queue**: every catalog search, filterable by state and catalog.
-- **Book page**: every sample with a player and its transcript, catalog
-  results with "Use this", manual entry, and buttons to start over or run
-  text search.
-- **Organize**: the final move, with undo.
-- **Settings**: see above.
+Four tabs, with a status bar on every page: Whisper and LLM status, and for
+each catalog its state, a live countdown until it may be called again, usage
+against each limit, and its queue size.
+
+- **Queue**: sets still being identified, with a chip per stage (sample,
+  transcript, reading, catalog search, needs review, no match, error). Each
+  row shows the parent and containing folder, the number of audio files with
+  an expandable file list, what the path rules say, and a *Move to top*
+  button that makes the set the next one processed. *Scan library folders*
+  at the top searches every folder listed in Settings for sets. A link leads
+  to the catalog search queue.
+- **Completed**: identified sets with author, title, series, a link (Audible
+  by ASIN, else Open Library by ISBN, else the catalog page), the method(s)
+  used, and Yes/No for whether the result matches the path rule's author and
+  title. Every column sorts (click the heading) and filters (boxes under the
+  headings). Links to Organize, the final move, with undo.
+- **All**: the same table for every set, with a Status column; sets not yet
+  identified have blanks.
+- **Settings**: library folders (add, remove; removing only forgets them in
+  the app), both methods (on/off, sample start and length, middle
+  percentage, extra samples, words per search, catalogs, score thresholds,
+  LLM fallback, whether a single text-search hit counts as a match), path
+  rules with a tester, catalog limits and the Whisper language. Saved in the
+  database and applied immediately.
+
+Clicking a set opens its page: every sample with a player and its transcript,
+catalog results with "Use this", manual entry, and buttons to start over or
+run text search.
 
 ## Run
 
@@ -80,7 +89,7 @@ database and applied immediately.
     # open http://<host>:8078
 
 The library is mounted at `/audiobooks` and added automatically; add more
-folders (subfolders, or other mounts) from the UI. The first start downloads
+folders (subfolders, or other mounts) on the Settings tab. The first start downloads
 the Whisper and LLM models.
 
 ## Environment

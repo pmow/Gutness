@@ -69,7 +69,7 @@ func (a *App) Start(ctx context.Context) {
 func (a *App) stage(ctx context.Context, status string, fn func(context.Context, *Item) error) {
 	for ctx.Err() == nil {
 		it, err := scanItem(a.db.QueryRow(`SELECT `+itemCols+` FROM items WHERE status=? AND next_at<=? AND missing=0
-			ORDER BY next_at, id LIMIT 1`, status, now()))
+			ORDER BY priority DESC, next_at, id LIMIT 1`, status, now()))
 		if err != nil {
 			if err != sql.ErrNoRows {
 				log.Printf("%s: %v", status, err)
@@ -111,7 +111,7 @@ func (a *App) doSample(ctx context.Context, it *Item) error {
 	s := a.settings()
 	if pm := it.PathMatch; s.PathAccept && it.Method == "" && pm.Author != "" && pm.Title != "" {
 		_, err := a.db.Exec(`UPDATE items SET status=?, detail=?, author=?, title=?, series=?, series_index=?, narrator=?, year=?,
-			source='path', attempts=0, updated=? WHERE id=?`, StMatched, "path rule \""+pm.Rule+"\" (listening skipped)",
+			source='path', found_by='Path rule', attempts=0, updated=? WHERE id=?`, StMatched, "path rule \""+pm.Rule+"\" (listening skipped)",
 			pm.Author, pm.Title, pm.Series, pm.SeriesIndex, pm.Narrator, pm.Year, now(), it.ID)
 		return err
 	}
@@ -265,7 +265,7 @@ func (a *App) lookupLoop(ctx context.Context, api *API) {
 		var qs string
 		var attempts int
 		err := a.db.QueryRow(`SELECT j.id, j.item_id, j.query, j.attempts FROM jobs j JOIN items i ON i.id=j.item_id
-			WHERE j.api=? AND j.status='queued' AND j.next_at<=? AND i.status=? ORDER BY j.next_at, j.id LIMIT 1`,
+			WHERE j.api=? AND j.status='queued' AND j.next_at<=? AND i.status=? ORDER BY i.priority DESC, j.next_at, j.id LIMIT 1`,
 			api.Name, now(), StPendingLookup).Scan(&id, &itemID, &qs, &attempts)
 		if err != nil {
 			select {
@@ -385,9 +385,14 @@ func (a *App) acceptCandidate(it *Item, c Candidate, source, status, detail stri
 	if series == "" {
 		series, idx = it.Guess.Series, it.Guess.SeriesIndex
 	}
+	foundBy := methodLabel(it.Method)
+	if source == "user" {
+		foundBy = "Picked by you"
+	}
 	_, err := a.db.Exec(`UPDATE items SET candidates=?, score=?, status=?, detail=?, author=?, title=?, series=?, series_index=?,
-		narrator=?, year=?, source=?, updated=? WHERE id=?`,
-		mustJSON(all), c.Score, status, detail, author, c.Title, series, idx, narr, c.Year, source+":"+c.API+":"+c.ID, now(), it.ID)
+		narrator=?, year=?, source=?, asin=?, isbn=?, link=?, found_by=?, updated=? WHERE id=?`,
+		mustJSON(all), c.Score, status, detail, author, c.Title, series, idx, narr, c.Year, source+":"+c.API+":"+c.ID,
+		c.ASIN, c.ISBN, c.URL, foundBy, now(), it.ID)
 	return err
 }
 

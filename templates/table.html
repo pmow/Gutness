@@ -1,0 +1,95 @@
+{{template "top" .}}
+<div class="card" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+  <form method="get" class="inline">
+    <select name="lib" onchange="this.form.submit()"><option value="0">All libraries</option>
+      {{range .Libraries}}<option value="{{.ID}}" {{if eq .ID $.Lib}}selected{{end}}>{{.Path}}</option>{{end}}
+    </select>
+  </form>
+  <span class="mut"><span id="shown">{{len .Rows}}</span> of {{.Total}} sets shown. Click a column to sort; type in the boxes under the headings to filter.{{if .Capped}} Only the first {{.Limit}} are listed.{{end}}</span>
+  <span style="flex:1"></span>
+  {{if eq .Which "completed"}}<a href="/organize">Organize into Author/Series/Title folders →</a>{{end}}
+</div>
+<div class="wrap"><table id="grid">
+<thead>
+<tr>
+  <th class="sort">Set (parent / folder)</th>
+  <th class="sort" data-type="num">Files</th>
+  {{if eq .Which "all"}}<th class="sort">Status</th>{{end}}
+  <th class="sort">Author</th>
+  <th class="sort">Title</th>
+  <th class="sort">Series</th>
+  <th class="sort">Link</th>
+  <th class="sort">Method(s)</th>
+  <th class="sort">Matches path</th>
+</tr>
+<tr class="filters">
+  <th><input data-col="0" placeholder="filter"></th>
+  <th><input data-col="1" placeholder="="></th>
+  {{if eq .Which "all"}}<th><select data-col="2"><option value="">any</option>{{range $k, $v := statusOptions}}<option>{{$v}}</option>{{end}}</select></th>{{end}}
+  {{$o := 0}}{{if eq .Which "all"}}{{$o = 1}}{{end}}
+  <th><input data-col="{{add 2 $o}}" placeholder="filter"></th>
+  <th><input data-col="{{add 3 $o}}" placeholder="filter"></th>
+  <th><input data-col="{{add 4 $o}}" placeholder="filter"></th>
+  <th><input data-col="{{add 5 $o}}" placeholder="ASIN / ISBN"></th>
+  <th><input data-col="{{add 6 $o}}" placeholder="filter"></th>
+  <th><select data-col="{{add 7 $o}}"><option value="">any</option><option>Yes</option><option>No</option><option value="—">no path match</option></select></th>
+</tr>
+</thead>
+<tbody>
+{{range .Rows}}
+<tr>
+  <td class="folder" title="{{.Full}}" data-v="{{.Parent}}/{{.Name}}" data-f="{{.Full}}"><small>{{.Parent}} /</small><a href="/item/{{.ID}}"><b>{{.Name}}</b></a>
+    <details><summary>files</summary><ol>{{range .Files}}<li>{{.}}</li>{{end}}</ol></details></td>
+  <td data-v="{{len .Files}}">{{len .Files}}</td>
+  {{if eq $.Which "all"}}<td data-v="{{label .Status}}"><span class="pill {{.Status}}">{{label .Status}}</span></td>{{end}}
+  <td>{{.Author}}</td>
+  <td>{{.Title}}</td>
+  <td data-v="{{.Series}} {{.Index}}">{{.Series}}{{if .Index}} <small>#{{.Index}}</small>{{end}}</td>
+  <td data-v="{{.LinkLabel}}">{{if .Link}}<a href="{{.Link}}" target="_blank" rel="noopener">{{.LinkLabel}}</a>{{end}}</td>
+  <td><small>{{.Methods}}</small></td>
+  <td data-v="{{if .PathAgrees}}{{.PathAgrees}}{{else}}—{{end}}">{{if eq .PathAgrees "Yes"}}<span class="yes">Yes</span>{{else if eq .PathAgrees "No"}}<span class="no" title="path says {{.PathTitle}}{{if .PathAuthor}} by {{.PathAuthor}}{{end}}">No</span>{{else}}<span class="mut">—</span>{{end}}</td>
+</tr>
+{{end}}
+</tbody>
+</table></div>
+<script>
+(() => {
+  const table = document.getElementById("grid"), body = table.tBodies[0];
+  const rows = Array.from(body.rows);
+  const val = (tr, i) => { const c = tr.cells[i]; return (c.dataset.v ?? c.textContent).trim(); };
+  const fval = (tr, i) => { const c = tr.cells[i]; return (c.dataset.f ?? val(tr, i)).toLowerCase(); }; // filters search the full path
+  const heads = table.tHead.rows[0].cells;
+  const key = "aural-sort-{{.Which}}";
+  let state = {};
+  try { state = JSON.parse(localStorage.getItem(key)) || {}; } catch (e) {}
+  function sort(i, dir) {
+    const num = heads[i].dataset.type === "num";
+    rows.sort((a, b) => {
+      const x = val(a, i), y = val(b, i);
+      if (!x && y) return 1; if (x && !y) return -1; // blanks last
+      const r = num ? (+x) - (+y) : x.localeCompare(y, undefined, {numeric: true, sensitivity: "base"});
+      return dir === "desc" ? -r : r;
+    });
+    for (const h of heads) h.classList.remove("asc", "desc");
+    heads[i].classList.add(dir);
+    rows.forEach(r => body.appendChild(r));
+    try { localStorage.setItem(key, JSON.stringify({col: i, dir})); } catch (e) {}
+  }
+  Array.from(heads).forEach((h, i) => h.addEventListener("click", () =>
+    sort(i, h.classList.contains("asc") ? "desc" : "asc")));
+  if (state.col !== undefined && heads[state.col]) sort(state.col, state.dir);
+  const filters = Array.from(table.querySelectorAll("tr.filters [data-col]"));
+  function apply() {
+    const active = filters.map(f => [+f.dataset.col, f.value.trim().toLowerCase(), f.tagName === "SELECT"]).filter(f => f[1]);
+    let shown = 0;
+    for (const r of rows) {
+      const ok = active.every(([i, v, exact]) => exact ? val(r, i).toLowerCase() === v : fval(r, i).includes(v));
+      r.style.display = ok ? "" : "none";
+      if (ok) shown++;
+    }
+    document.getElementById("shown").textContent = shown;
+  }
+  filters.forEach(f => f.addEventListener("input", apply));
+})();
+</script>
+{{template "bottom" .}}

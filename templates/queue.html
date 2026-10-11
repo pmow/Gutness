@@ -1,25 +1,38 @@
 {{template "top" .}}
-<p class="mut">Each method queues one search per catalog it uses. Searches go out in the background only as fast as each catalog's limits allow; when a catalog says to slow down, its queue pauses until the timer above runs out.</p>
-<div class="tabs">
-  {{range .JobFilters}}<a href="/queue{{qs "status" . "api" $.API}}" class="{{if eq . $.JobStatus}}on{{end}}">{{.}} ({{index $.JobCounts .}})</a>{{end}}
+<div class="card" style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+  <form method="post" action="/scan" class="inline"><input type="hidden" name="token" value="{{.Token}}"><button class="primary">Scan library folders</button></form>
+  <span class="mut">{{if .Scanning}}Scanning…{{else}}Looks for sets in {{len .Libraries}} folder(s) from <a href="/settings#libraries">Settings</a>.{{end}}</span>
+  <span style="flex:1"></span>
+  <a href="/lookups">Catalog search queue →</a>
 </div>
+
 <div class="tabs">
-  <a href="/queue{{qs "status" .JobStatus}}" class="{{if eq .API ""}}on{{end}}">every catalog</a>
-  {{range .APIs}}<a href="/queue{{qs "status" $.JobStatus "api" .Name}}" class="{{if eq .Name $.API}}on{{end}}">{{.Label}}</a>{{end}}
+  <a href="/queue{{qs "lib" .Lib "q" .Q}}" class="{{if eq .Stage ""}}on{{end}}">Everything in queue ({{.InQueue}})</a>
+  {{range .Stages}}<a href="/queue{{qs "stage" . "lib" $.Lib "q" $.Q}}" class="{{if eq . $.Stage}}on{{end}}">{{label .}} ({{index $.Counts .}})</a>{{end}}
 </div>
+<form method="get" action="/queue" style="margin-bottom:10px">
+  <input type="hidden" name="stage" value="{{.Stage}}">
+  <select name="lib"><option value="0">All libraries</option>
+    {{range .Libraries}}<option value="{{.ID}}" {{if eq .ID $.Lib}}selected{{end}}>{{.Path}}</option>{{end}}
+  </select>
+  <input type="search" name="q" value="{{.Q}}" placeholder="Filter by folder">
+  <button>Filter</button> <small>{{.Total}} sets</small>
+</form>
+
 <div class="wrap"><table>
-<tr><th>#</th><th>Catalog</th><th>Method</th><th>Book folder</th><th>Search</th><th>Status</th><th>Tries</th><th>Updated</th></tr>
-{{range .Jobs}}
+<tr><th>#</th><th>Set (parent / folder)</th><th>Audio files</th><th>Stage</th><th>Path rule says</th><th></th></tr>
+{{range $i, $r := .Rows}}
 <tr>
-  <td>{{.ID}}</td><td>{{.API}}</td><td><small>{{method .Method}}{{if gt .Round 1}} (sample {{.Round}}){{end}}</small></td>
-  <td class="path"><a href="/item/{{.ItemID}}">{{short .Folder 80}}</a></td>
-  <td>{{if .Query.Title}}<b>{{.Query.Title}}</b>{{if .Query.Author}} by {{.Query.Author}}{{end}}{{else if .Query.FullText}}<small>text: “{{short .Query.FullText 120}}”</small>{{else}}<small>“{{.Query.Keywords}}”</small>{{end}}</td>
-  <td><span class="pill">{{.Status}}</span>{{if eq .Status "done"}} <small>{{.Results}} results</small>{{end}}
-      {{if and (eq .Status "queued") (gt .NextAt $.NowUnix)}}<br><small>retry after backoff</small>{{end}}
-      {{if .Error}}<br><small>{{short .Error 140}}</small>{{end}}</td>
-  <td>{{.Attempts}}</td><td><small>{{ago .Updated}}</small></td>
+  <td class="mut">{{add $.Offset (add $i 1)}}</td>
+  <td class="folder" title="{{.Full}}"><small>{{.Parent}} /</small><a href="/item/{{.ID}}"><b>{{.Name}}</b></a></td>
+  <td>{{len .Files}}{{if eq .Kind "single"}} <small>(single file)</small>{{end}}
+    <details><summary>show files</summary><ol>{{range .Files}}<li>{{.}}</li>{{end}}</ol></details></td>
+  <td><span class="pill {{.Status}}">{{label .Status}}</span>{{if .Detail}}<br><small>{{short .Detail 140}}</small>{{end}}</td>
+  <td><small>{{if .PathTitle}}{{.PathTitle}}{{if .PathAuthor}} · {{.PathAuthor}}{{end}}{{else}}—{{end}}</small></td>
+  <td>{{if gt .Priority 0}}<small class="mut">pinned</small> {{end}}<form method="post" action="/item/{{.ID}}/top" class="inline"><input type="hidden" name="token" value="{{$.Token}}"><input type="hidden" name="back" value="/queue{{qs "stage" $.Stage "lib" $.Lib "q" $.Q}}"><button title="Process this set next">Move to top</button></form></td>
 </tr>
-{{else}}<tr><td colspan="8" class="mut">No searches in this view.</td></tr>{{end}}
+{{else}}<tr><td colspan="6" class="mut">Nothing waiting. Press Scan to look for new sets.</td></tr>{{end}}
 </table></div>
-<small>Showing up to 500.</small>
+<p>{{if gt .Page 0}}<a href="/queue{{qs "stage" .Stage "lib" .Lib "q" .Q "page" (add .Page -1)}}">← previous</a>{{end}}
+{{if .HasMore}} <a href="/queue{{qs "stage" .Stage "lib" .Lib "q" .Q "page" (add .Page 1)}}">next →</a>{{end}}</p>
 {{template "bottom" .}}
