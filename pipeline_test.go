@@ -279,11 +279,12 @@ func TestPathRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := []struct{ path, rule, author, series, index, title, year string }{
-		{"Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings/Part 01 of 53.mp3", "Author/Series/# - Title", "Brandon Sanderson", "The Stormlight Archive", "01", "The Way of Kings", ""},
-		{"James S. A. Corey/The Expanse/Vol 3 - Abaddon's Gate/01 of 20.mp3", "Author/Series/# - Title", "James S. A. Corey", "The Expanse", "3", "Abaddon's Gate", ""},
-		{"Andy Weir - Project Hail Mary (2021)/1 of 2.mp3", "Author - Title folder", "Andy Weir", "", "", "Project Hail Mary", "2021"},
-		{"Frank Herbert/Dune/Dune.m4b", "Author/Title", "Frank Herbert", "", "", "Dune", ""},
-		{"loose.mp3", "", "", "", "", "", ""},
+		{"Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings", "Author/Series/# - Title", "Brandon Sanderson", "The Stormlight Archive", "01", "The Way of Kings", ""},
+		{"Fantasy/Brandon Sanderson/The Stormlight Archive/Book 2 - Words of Radiance", "Author/Series/# - Title", "Brandon Sanderson", "The Stormlight Archive", "2", "Words of Radiance", ""},
+		{"The Expanse/Vol 3 - Abaddon's Gate", "Series/# - Title", "", "The Expanse", "3", "Abaddon's Gate", ""},
+		{"Sci-Fi/Andy Weir - Project Hail Mary (2021)", "Author - Title folder", "Andy Weir", "", "", "Project Hail Mary", "2021"},
+		{"Frank Herbert/Dune", "Author/Title", "Frank Herbert", "", "", "Dune", ""},
+		{"loose", "", "", "", "", "", ""},
 	}
 	for _, c := range cases {
 		m := matchPath(rules, c.path)
@@ -294,13 +295,13 @@ func TestPathRules(t *testing.T) {
 	// Order decides: a rule placed first wins even if a later one also matches.
 	custom := append([]PathRule{{Name: "everything", Enabled: true, Pattern: `^(?P<title>.+)$`}}, defaultPathRules...)
 	rules, _ = compilePathRules(custom)
-	if m := matchPath(rules, "Frank Herbert/Dune/Dune.m4b"); m.Rule != "everything" {
+	if m := matchPath(rules, "Frank Herbert/Dune"); m.Rule != "everything" {
 		t.Errorf("first rule should win, got %q", m.Rule)
 	}
 	// Disabled rules are skipped; rules without a title group are rejected.
 	custom[0].Enabled = false
 	rules, _ = compilePathRules(custom)
-	if m := matchPath(rules, "Frank Herbert/Dune/Dune.m4b"); m.Rule != "Author/Title" {
+	if m := matchPath(rules, "Frank Herbert/Dune"); m.Rule != "Author/Title" {
 		t.Errorf("disabled rule used: %q", m.Rule)
 	}
 	if _, err := compilePathRules([]PathRule{{Name: "x", Pattern: `^(?P<author>.+)$`}}); err == nil {
@@ -308,5 +309,12 @@ func TestPathRules(t *testing.T) {
 	}
 	if _, err := compilePathRules([]PathRule{{Name: "x", Pattern: `(`}}); err == nil {
 		t.Error("bad regex accepted")
+	}
+}
+
+func TestPathSubject(t *testing.T) {
+	it := &Item{Folder: "/audiobooks/a/b/c/d"}
+	if got := pathSubject("/audiobooks", it); got != "a/b/c/d" {
+		t.Error(got)
 	}
 }

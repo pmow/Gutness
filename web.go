@@ -559,7 +559,6 @@ func (a *App) settingsHandler(r *http.Request) (string, string) {
 	for _, o := range rs {
 		s.PathRules = append(s.PathRules, o.rule)
 	}
-	s.PathMatchFull = on("path_full")
 	s.PathAccept = on("path_accept")
 	s.PathCrossCheck = on("path_cross")
 	if err := s.validate(); err != nil {

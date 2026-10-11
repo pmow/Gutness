@@ -32,7 +32,22 @@ func (m PathMatch) Found() bool { return m.Rule != "" }
 
 var pathGroups = []string{"author", "title", "series", "index", "narrator", "year"}
 
+// Rules see the set's folder path inside its library, e.g. for the library
+// /audiobooks, the set /audiobooks/a/b/c/d is matched as "a/b/c/d".
 var defaultPathRules = []PathRule{
+	{Name: "Author/Series/# - Title", Enabled: true,
+		Pattern: `^(?:.*/)?(?P<author>[^/]+)/(?P<series>[^/]+)/(?:Book |Vol\.? ?|#)?(?P<index>\d{1,3}(?:\.\d+)?)\s*[-.]\s*(?P<title>[^/]+)$`},
+	{Name: "Series/# - Title", Enabled: true,
+		Pattern: `^(?P<series>[^/]+)/(?:Book |Vol\.? ?|#)?(?P<index>\d{1,3}(?:\.\d+)?)\s*[-.]\s*(?P<title>[^/]+)$`},
+	{Name: "Author - Title folder", Enabled: true,
+		Pattern: `^(?:.*/)?(?P<author>[^/]+?) - (?P<title>[^/]+?)(?: \((?P<year>\d{4})\))?$`},
+	{Name: "Author/Title", Enabled: true,
+		Pattern: `^(?P<author>[^/]+)/(?P<title>[^/]+)$`},
+}
+
+// oldDefaultPathRules matched the path of the first file; settings
+// still holding them untouched are moved to the new defaults.
+var oldDefaultPathRules = []PathRule{
 	{Name: "Author/Series/# - Title", Enabled: true,
 		Pattern: `^(?P<author>[^/]+)/(?P<series>[^/]+)/(?:Book |Vol\.? ?|#)?(?P<index>\d{1,3}(?:\.\d+)?)\s*[-.]\s*(?P<title>[^/]+)/[^/]+$`},
 	{Name: "Author - Title folder", Enabled: true,
@@ -65,17 +80,12 @@ func compilePathRules(rules []PathRule) ([]compiledRule, error) {
 	return out, nil
 }
 
-// pathSubject is what the rules are matched against: the path of part 1,
-// with forward slashes, either inside the library or in full.
-func pathSubject(root string, it *Item, full bool) string {
+// pathSubject is what the rules are matched against: the set's folder
+// inside its library, with forward slashes.
+func pathSubject(root string, it *Item) string {
 	p := it.Folder
-	if len(it.Files) > 0 {
-		p = filepath.Join(it.Folder, it.Files[0])
-	}
-	if !full {
-		if rel, err := filepath.Rel(root, p); err == nil && !strings.HasPrefix(rel, "..") {
-			p = rel
-		}
+	if rel, err := filepath.Rel(root, p); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+		p = rel
 	}
 	return filepath.ToSlash(p)
 }
@@ -137,7 +147,7 @@ func applyPathRules(db *sql.DB, s Settings, libraryID int64) error {
 	}
 	defer tx.Rollback()
 	for _, it := range items {
-		pm := matchPath(rules, pathSubject(roots[it.LibraryID], it, s.PathMatchFull))
+		pm := matchPath(rules, pathSubject(roots[it.LibraryID], it))
 		if _, err := tx.Exec(`UPDATE items SET path_match=? WHERE id=?`, mustJSON(pm), it.ID); err != nil {
 			return err
 		}

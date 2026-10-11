@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -17,7 +18,6 @@ type Settings struct {
 
 	// Path rules: ordered regexes over the path of part 1; the first match wins.
 	PathRules      []PathRule `json:"path_rules"`
-	PathMatchFull  bool       `json:"path_match_full"`  // match the full path instead of the path inside the library
 	PathAccept     bool       `json:"path_accept"`      // treat a path match with author and title as matched, skipping listening
 	PathCrossCheck bool       `json:"path_cross_check"` // send audio matches that disagree with the path to review
 }
@@ -93,6 +93,9 @@ func loadSettings(db *sql.DB, cfg Config) Settings {
 	var raw string
 	if db.QueryRow(`SELECT value FROM settings WHERE key='settings'`).Scan(&raw) == nil {
 		json.Unmarshal([]byte(raw), &s) // stored values override defaults; new fields keep defaults
+		if reflect.DeepEqual(s.PathRules, oldDefaultPathRules) {
+			s.PathRules = defaultPathRules
+		}
 	}
 	return s
 }

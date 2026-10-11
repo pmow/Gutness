@@ -19,12 +19,12 @@ and an optional LLM (Ollama), all from `docker-compose.yml`. Web UI on port **80
      parts but only 52 audio files are here; missing part 17"). These are
      listed but not sampled.
 2. **Path rules.** An ordered list of regular expressions (Settings page) is
-   tried against the path of each book's first file; the first that matches
+   tried against each set's folder path inside its library (library
+   `/audiobooks`, set `/audiobooks/a/b/c/d` -> `a/b/c/d`); the first that matches
    gives the author, title and series shown on the book. Named groups:
    `author`, `title` (required), `series`, `index`, `narrator`, `year`.
-   Defaults cover `Author/Series/01 - Title/…`, `Author - Title (2021)/…` and
-   `Author/Title/…`. Options: match the full path instead of the path inside
-   the library; accept a path match without listening; and (on by default)
+   Defaults cover `Author/Series/01 - Title`, `Series/01 - Title`,
+   `Author - Title (2021)` and `Author/Title`. Options: accept a path match without listening; and (on by default)
    send a listening result that names a different book than the path to
    review instead of matching it.
 3. **Recognize** with the enabled methods, in order. When one can't identify
