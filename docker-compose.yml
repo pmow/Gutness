@@ -1,11 +1,13 @@
 # Aural Organizer: the app, a Whisper speech-to-text service and an LLM.
 #   1. Set AUDIOBOOKS to your library folder (or edit the volume below).
-#   2. docker compose up -d
+#   2. docker compose up -d          (pulls the published image)
+#      docker compose up -d --build  (builds from this folder instead)
 #   3. Open http://<this machine>:8078 and add /audiobooks (or a subfolder) as a library.
 # First start downloads the Whisper and LLM models, which takes a while.
 
 services:
   aural:
+    image: ghcr.io/pmow/aural:latest
     build: .
     ports:
       - "8078:8078"
