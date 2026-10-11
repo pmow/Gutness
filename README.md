@@ -86,7 +86,7 @@ run text search.
 ## Run
 
 Copy [`docker-compose.yml`](docker-compose.yml) (also shown on the Settings
-tab), change `/path/to/audiobooks` to your library folder, then:
+tab) as is, then:
 
     docker compose up -d
     # open http://<host>:8078
@@ -95,8 +95,13 @@ It pulls `ghcr.io/pmow/gutness:latest`, which GitHub Actions builds from
 `main` for amd64 and arm64. To build it yourself instead:
 `docker build -t ghcr.io/pmow/gutness:latest .`
 
-On first start the mounted `/audiobooks` is added as a library; press **Scan**
-on the Queue tab. More folders can be added on the Settings tab.
+No library path goes in the compose file. It makes `/mnt`, `/media`, `/home`
+and `/srv` visible inside the container at the same paths, so on the Settings
+tab you add each library by its normal server path (e.g.
+`/mnt/user/audiobooks`). Library paths and all other settings are kept in the
+SQLite database in `./data`. Then press **Scan** on the Queue tab. If your
+books live somewhere else (e.g. Synology's `/volume1`), add that folder the
+same way under `volumes:`.
 
 ## Configuration
 

@@ -1,9 +1,9 @@
 # Gutness: recognizes audiobooks by listening, then organizes them.
-#   1. Change /path/to/audiobooks below to your library folder.
-#   2. docker compose up -d
-#   3. Open http://<this machine>:8078 and press Scan on the Queue tab.
-# Everything else is set on the Settings tab. The first start downloads the
-# Whisper and LLM models, which takes a while.
+#   1. docker compose up -d
+#   2. Open http://<this machine>:8078, add your audiobook folders on the
+#      Settings tab (e.g. /mnt/user/audiobooks), then press Scan on the Queue tab.
+# Everything is set on the Settings tab and kept in ./data/gutness.db.
+# The first start downloads the Whisper and LLM models, which takes a while.
 
 services:
   gutness:
@@ -14,7 +14,12 @@ services:
       GUTNESS_PORT: "8078"            # the only setting outside the web UI
     volumes:
       - ./data:/data                  # database, samples, undo journals
-      - /path/to/audiobooks:/audiobooks # your library; needs write access to organize
+      # Server folders visible at the same paths; pick libraries in Settings.
+      # Write access is used only by the final organize step.
+      - /mnt:/mnt
+      - /media:/media
+      - /home:/home
+      - /srv:/srv
     depends_on: [whisper, ollama]
     restart: unless-stopped
 

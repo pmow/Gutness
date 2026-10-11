@@ -47,14 +47,6 @@ func main() {
 	app.limiter = NewLimiter(db, app.apis)
 	app.applySettings(loadSettings(db))
 
-	// On first start in Docker, add the mounted library so Scan works right away.
-	if len(listLibraries(db)) == 0 {
-		if st, err := os.Stat("/audiobooks"); err == nil && st.IsDir() {
-			if _, err := addLibrary(db, "/audiobooks"); err != nil {
-				log.Printf("library /audiobooks: %v", err)
-			}
-		}
-	}
 	ctx := context.Background()
 	app.Start(ctx)
 	go app.rescanLoop(ctx)

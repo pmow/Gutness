@@ -1,6 +1,6 @@
 {{template "top" .}}
 <fieldset id="libraries"><legend>Library folders</legend>
-  <p class="mut" style="margin-top:0">The Scan button on the Queue tab searches these folders for sets. Inside Docker, use paths as the container sees them (e.g. <code>/audiobooks</code>).</p>
+  <p class="mut" style="margin-top:0">The Scan button on the Queue tab searches these folders for sets. Type paths as they are on your server (e.g. <code>/mnt/user/audiobooks</code>); add as many as you like. They are stored in the app's SQLite database.</p>
   {{range .Libraries}}
   <div style="margin:6px 0">
     <b>{{.Path}}</b> <small>scanned {{ago .LastScan}}</small>
@@ -11,7 +11,7 @@
   {{else}}<p class="mut">No library folders yet.</p>{{end}}
   <form method="post" action="/libraries" style="margin-top:8px">
     <input type="hidden" name="token" value="{{.Token}}">
-    <input type="text" name="path" placeholder="/audiobooks" style="width:min(380px,100%)" required>
+    <input type="text" name="path" placeholder="/mnt/user/audiobooks" style="width:min(380px,100%)" required>
     <button>Add folder</button>
   </form>
   <small class="mut">Removing a folder only removes it and its sets from this app; no files are touched.</small>
@@ -105,7 +105,7 @@
 <form id="testform" method="get" action="/settings#paths"></form>
 
 <fieldset id="compose"><legend>Suggested docker compose file</legend>
-  <p class="mut" style="margin-top:0">Gutness with Whisper and an LLM. Change the <code>/path/to/audiobooks</code> line to your library; it appears as <code>/audiobooks</code> above. <code>GUTNESS_PORT</code> is the only environment setting.</p>
+  <p class="mut" style="margin-top:0">Gutness with Whisper and an LLM. It needs no edits: <code>/mnt</code>, <code>/media</code>, <code>/home</code> and <code>/srv</code> are visible inside the container at the same paths, and you choose which folders are libraries under Library folders above. <code>GUTNESS_PORT</code> is the only environment setting.</p>
   <pre class="compose">{{.Compose}}</pre>
 </fieldset>
 {{template "bottom" .}}

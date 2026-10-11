@@ -24,18 +24,19 @@ func (s ScanSummary) String() string {
 }
 
 func addLibrary(db *sql.DB, path string) (int64, error) {
-	path, err := filepath.Abs(strings.TrimSpace(path))
-	if err != nil {
-		return 0, err
+	typed := strings.TrimSpace(path)
+	if !filepath.IsAbs(typed) {
+		return 0, fmt.Errorf("give the full path of the folder, starting with /")
 	}
+	path = filepath.Clean(typed)
 	if st, err := os.Stat(path); err != nil || !st.IsDir() {
-		return 0, fmt.Errorf("%s is not a readable folder", path)
+		return 0, fmt.Errorf("%s is not a readable folder (in Docker, folders outside /mnt, /media, /home and /srv need a line under volumes: in the compose file)", typed)
 	}
 	if _, err := db.Exec(`INSERT OR IGNORE INTO libraries(path, added) VALUES(?, ?)`, path, now()); err != nil {
 		return 0, err
 	}
 	var id int64
-	err = db.QueryRow(`SELECT id FROM libraries WHERE path=?`, path).Scan(&id)
+	err := db.QueryRow(`SELECT id FROM libraries WHERE path=?`, path).Scan(&id)
 	return id, err
 }
 
