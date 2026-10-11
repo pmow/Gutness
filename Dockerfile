@@ -4,12 +4,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /aural .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /gutness .
 
 FROM alpine:3.20
 RUN apk add --no-cache ffmpeg ca-certificates tzdata
-COPY --from=build /aural /usr/local/bin/aural
-ENV AURAL_ADDR=:8078 AURAL_DATA=/data
+COPY --from=build /gutness /usr/local/bin/gutness
+# GUTNESS_PORT is the only environment setting; everything else is in the web UI.
+ENV GUTNESS_PORT=8078
 VOLUME /data
 EXPOSE 8078
-ENTRYPOINT ["aural"]
+ENTRYPOINT ["gutness"]

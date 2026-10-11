@@ -113,8 +113,8 @@ func (announceMethod) NextSample(ctx context.Context, s Settings, it *Item) (Sam
 func (announceMethod) Plan(ctx context.Context, a *App, s Settings, it *Item) (Guess, Query, error) {
 	text := heardBy(it, "announce")
 	g := heuristicGuess(text)
-	if (g.Title == "" || g.Author == "") && s.Announce.UseLLM && a.cfg.OllamaURL != "" {
-		lg, err := ExtractGuess(ctx, a.cfg, text)
+	if conf := a.conf(); (g.Title == "" || g.Author == "") && s.Announce.UseLLM && conf.OllamaURL != "" {
+		lg, err := ExtractGuess(ctx, conf, text)
 		if err != nil {
 			var down errServiceDown
 			if errors.As(err, &down) {
@@ -122,7 +122,7 @@ func (announceMethod) Plan(ctx context.Context, a *App, s Settings, it *Item) (G
 			}
 			return g, Query{}, err
 		}
-		a.setService("llm", true, "model "+a.cfg.OllamaModel)
+		a.setService("llm", true, "model "+conf.OllamaModel)
 		g = lg
 	}
 	// The bare minimum is "Title, by Author".

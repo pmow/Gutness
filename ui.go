@@ -99,10 +99,11 @@ func (a *App) queuePage(w http.ResponseWriter, r *http.Request, render func(http
 	rows, err := a.db.Query(`SELECT `+itemCols+` FROM items WHERE `+strings.Join(where, " AND ")+
 		` ORDER BY priority DESC, id LIMIT ? OFFSET ?`, append(args, pageSize, page*pageSize)...)
 	var list []Row
+	region := a.conf().AudibleRegion
 	if err == nil {
 		for rows.Next() {
 			if it, err := scanItem(rows); err == nil {
-				list = append(list, toRow(it, a.cfg.AudibleRegion))
+				list = append(list, toRow(it, region))
 			}
 		}
 		rows.Close()
@@ -140,10 +141,11 @@ func (a *App) tablePage(w http.ResponseWriter, r *http.Request, render func(http
 	a.db.QueryRow(`SELECT COUNT(*) FROM items WHERE `+strings.Join(where, " AND "), args...).Scan(&total)
 	rows, err := a.db.Query(`SELECT `+itemCols+` FROM items WHERE `+strings.Join(where, " AND ")+` ORDER BY folder LIMIT ?`, append(args, limit)...)
 	var list []Row
+	region := a.conf().AudibleRegion
 	if err == nil {
 		for rows.Next() {
 			if it, err := scanItem(rows); err == nil {
-				list = append(list, toRow(it, a.cfg.AudibleRegion))
+				list = append(list, toRow(it, region))
 			}
 		}
 		rows.Close()

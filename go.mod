@@ -1,4 +1,4 @@
-module github.com/pmow/aural
+module github.com/pmow/gutness
 
 go 1.24
 

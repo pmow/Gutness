@@ -26,19 +26,16 @@ func (e errServiceDown) Error() string { return e.err.Error() }
 
 func serviceDown(format string, a ...any) error { return errServiceDown{fmt.Errorf(format, a...)} }
 
+// Config is what the helpers need to reach other services. Addr and DataDir
+// are fixed at start; the rest comes from the Settings page (App.conf).
 type Config struct {
 	Addr          string
 	DataDir       string
-	SampleStart   int // seconds into part 1
-	SampleSeconds int
 	WhisperURL    string
-	WhisperLang   string
 	OllamaURL     string
 	OllamaModel   string
 	GoogleKey     string
 	AudibleRegion string
-	APIs          []string
-	Limits        string
 }
 
 // ExtractSample cuts seconds of audio starting at offset from src, as

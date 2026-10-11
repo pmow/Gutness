@@ -15,11 +15,23 @@ type Settings struct {
 	TextSearch      TextSearchSettings `json:"text_search"`
 	Limits          map[string]string  `json:"limits"` // per API, e.g. "1/2s,300/1h"
 	WhisperLanguage string             `json:"whisper_language"`
+	Services        ServiceSettings    `json:"services"`
 
 	// Path rules: ordered regexes over the path of part 1; the first match wins.
 	PathRules      []PathRule `json:"path_rules"`
 	PathAccept     bool       `json:"path_accept"`      // treat a path match with author and title as matched, skipping listening
 	PathCrossCheck bool       `json:"path_cross_check"` // send audio matches that disagree with the path to review
+}
+
+// ServiceSettings say where the helper services are and how to reach the
+// catalogs. The defaults match the suggested docker-compose.yml.
+type ServiceSettings struct {
+	WhisperURL    string `json:"whisper_url"`
+	OllamaURL     string `json:"ollama_url"` // blank = no LLM, pattern matching only
+	OllamaModel   string `json:"ollama_model"`
+	AudibleRegion string `json:"audible_region"`
+	GoogleKey     string `json:"google_key"`
+	RescanHours   int    `json:"rescan_hours"` // 0 = only when Scan is pressed
 }
 
 // AnnounceSettings configure method 1: listen to the opening for
@@ -52,21 +64,22 @@ var methodCatalogs = map[string][]string{
 	"text_search": {"googlebooks", "openlibrary"},
 }
 
-func defaultSettings(cfg Config) Settings {
+func defaultSettings() Settings {
 	limits := map[string]string{}
-	parsed, _ := parseLimits(cfg.Limits)
-	for name, ws := range parsed {
+	for name, ws := range defaultLimits {
 		limits[name] = formatLimits(ws)
 	}
 	return Settings{
-		Announce: AnnounceSettings{Enabled: true, Start: cfg.SampleStart, Seconds: 15, UseLLM: cfg.OllamaURL != "",
+		Announce: AnnounceSettings{Enabled: true, Start: 0, Seconds: 15, UseLLM: true,
 			Catalogs: []string{"audible", "openlibrary", "googlebooks"}, MatchPct: 80, ReviewPct: 45},
 		TextSearch: TextSearchSettings{Enabled: true, Seconds: 30, MiddlePct: 80, ExtraSamples: 1, MaxWords: 150,
 			Catalogs: []string{"googlebooks", "openlibrary"}, AcceptSingle: true},
 		Limits:          limits,
-		WhisperLanguage: cfg.WhisperLang,
-		PathRules:       defaultPathRules,
-		PathCrossCheck:  true,
+		WhisperLanguage: "en",
+		Services: ServiceSettings{WhisperURL: "http://whisper:9000", OllamaURL: "http://ollama:11434",
+			OllamaModel: "llama3.2:3b", AudibleRegion: "com", RescanHours: 6},
+		PathRules:      defaultPathRules,
+		PathCrossCheck: true,
 	}
 }
 
@@ -88,8 +101,8 @@ func shortDur(d interface{ String() string }) string {
 	return s
 }
 
-func loadSettings(db *sql.DB, cfg Config) Settings {
-	s := defaultSettings(cfg)
+func loadSettings(db *sql.DB) Settings {
+	s := defaultSettings()
 	var raw string
 	if db.QueryRow(`SELECT value FROM settings WHERE key='settings'`).Scan(&raw) == nil {
 		json.Unmarshal([]byte(raw), &s) // stored values override defaults; new fields keep defaults
@@ -106,8 +119,22 @@ func saveSettings(db *sql.DB, s Settings) error {
 }
 
 func (s Settings) validate() error {
-	a, t := s.Announce, s.TextSearch
+	a, t, sv := s.Announce, s.TextSearch, s.Services
 	switch {
+	case !strings.HasPrefix(sv.WhisperURL, "http://") && !strings.HasPrefix(sv.WhisperURL, "https://"):
+		return fmt.Errorf("Whisper URL must start with http:// or https://")
+	case sv.OllamaURL != "" && !strings.HasPrefix(sv.OllamaURL, "http://") && !strings.HasPrefix(sv.OllamaURL, "https://"):
+		return fmt.Errorf("LLM URL must start with http:// or https://, or be blank")
+	case sv.OllamaURL != "" && strings.TrimSpace(sv.OllamaModel) == "":
+		return fmt.Errorf("give an LLM model, e.g. llama3.2:3b")
+	case sv.RescanHours < 0:
+		return fmt.Errorf("rescan hours can't be negative")
+	case a.Enabled && len(a.Catalogs) == 0:
+		return fmt.Errorf("pick at least one catalog for title announcement, or turn it off")
+	case t.Enabled && len(t.Catalogs) == 0:
+		return fmt.Errorf("pick at least one catalog for text search, or turn it off")
+	case !a.Enabled && !t.Enabled:
+		return fmt.Errorf("turn on at least one recognition method")
 	case a.Seconds < 5 || a.Seconds > 120:
 		return fmt.Errorf("announcement sample must be 5 to 120 seconds")
 	case a.Start < 0:

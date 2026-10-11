@@ -1,4 +1,4 @@
-# Aural Organizer
+# Gutness
 
 Recognizes audiobooks by **listening** to them, then (as a last step) files
 them into the folder layout Audiobookshelf expects.
@@ -85,32 +85,37 @@ run text search.
 
 ## Run
 
-    AUDIOBOOKS=/path/to/audiobooks docker compose up -d
+Copy [`docker-compose.yml`](docker-compose.yml) (also shown on the Settings
+tab), change `/path/to/audiobooks` to your library folder, then:
+
+    docker compose up -d
     # open http://<host>:8078
 
-The library is mounted at `/audiobooks` and added automatically; add more
-folders (subfolders, or other mounts) on the Settings tab. The first start downloads
-the Whisper and LLM models.
+It pulls `ghcr.io/pmow/gutness:latest`, which GitHub Actions builds from
+`main` for amd64 and arm64. To build it yourself instead:
+`docker build -t ghcr.io/pmow/gutness:latest .`
 
-## Environment
+On first start the mounted `/audiobooks` is added as a library; press **Scan**
+on the Queue tab. More folders can be added on the Settings tab.
 
-| Variable | Default | |
-|---|---|---|
-| `LIBRARIES` | | `:`-separated folders to add on start |
-| `WHISPER_URL` | `http://localhost:9000` | |
-| `OLLAMA_URL`, `OLLAMA_MODEL` | off, `llama3.2:3b` | the model is pulled automatically |
-| `LOOKUP_APIS` | `audible,openlibrary,googlebooks` | |
-| `AUDIBLE_REGION` | `com` | `co.uk`, `de`, `ca`, `com.au`, … |
-| `GOOGLE_BOOKS_API_KEY` | | optional, raises Google's daily limit |
-| `RESCAN_HOURS` | 6 | |
-| `API_LIMITS`, `WHISPER_LANGUAGE` | | first-run defaults; then use the Settings page |
+## Configuration
+
+Everything is on the **Settings** tab and stored in the database. The only
+environment variable is `GUTNESS_PORT` (default `8078`), the port the web UI
+listens on; keep the compose `ports:` mapping in step with it.
+
+Settings > Services holds the Whisper URL (default `http://whisper:9000`,
+the compose service), the LLM URL and model (default `http://ollama:11434`,
+`llama3.2:3b`; blank the URL to run without an LLM), the Audible region, an
+optional Google Books API key and how often to rescan. Audible, Open Library
+and Google Books are all built in; tick the ones each recognition method
+should use.
 
 ## Models
 
 Both download themselves on first start: Whisper's `base.en` model (from
 Hugging Face, via the whisper container) and the LLM (`llama3.2:3b`, about
 2 GB, pulled by the app through Ollama). To fetch the LLM by hand:
-`docker compose exec ollama ollama pull llama3.2:3b`. The LLM is optional;
-remove `OLLAMA_URL` to run without it.
+`docker compose exec ollama ollama pull llama3.2:3b`.
 
 The UI has no login; keep port 8078 on your home network.

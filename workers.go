@@ -35,6 +35,7 @@ type App struct {
 	transcribe func(ctx context.Context, lang, path string) (string, error)
 	services   map[string]*ServiceStatus
 	wake       chan struct{}
+	recheck    chan struct{} // re-test Whisper/LLM now, e.g. after a settings save
 	scanning   map[int64]bool
 }
 
@@ -148,7 +149,7 @@ func (a *App) doTranscribe(ctx context.Context, it *Item) error {
 	transcribe := a.transcribe
 	if transcribe == nil {
 		transcribe = func(ctx context.Context, lang, path string) (string, error) {
-			return Transcribe(ctx, a.cfg, lang, path)
+			return Transcribe(ctx, a.conf(), lang, path)
 		}
 	}
 	text, err := transcribe(ctx, a.settings().WhisperLanguage, last.Path)
@@ -397,34 +398,41 @@ func (a *App) acceptCandidate(it *Item, c Candidate, source, status, detail stri
 }
 
 // watchServices keeps the Whisper/LLM status current and pulls the model.
+// A settings save sends on recheck so new URLs show up at once.
 func (a *App) watchServices(ctx context.Context) {
 	var pulling atomic.Bool
 	for ctx.Err() == nil {
-		if err := pingService(ctx, a.cfg.WhisperURL, "/docs"); err != nil {
-			a.setService("whisper", false, "not reachable: "+err.Error())
-		} else {
-			a.setService("whisper", true, "ready")
-		}
-		if a.cfg.OllamaURL == "" {
-			a.setService("llm", true, "not configured; announcements are read by pattern matching")
-		} else if has, err := ollamaHasModel(ctx, a.cfg); err != nil {
-			a.setService("llm", false, "not reachable: "+err.Error())
-		} else if !has {
-			a.setService("llm", false, "downloading model "+a.cfg.OllamaModel)
-			if pulling.CompareAndSwap(false, true) {
-				go func() {
-					defer pulling.Store(false)
-					if err := ollamaPull(a.cfg); err != nil {
-						log.Printf("pull %s: %v", a.cfg.OllamaModel, err)
-					}
-				}()
-			}
-		} else {
-			a.setService("llm", true, "model "+a.cfg.OllamaModel)
-		}
+		a.checkServices(ctx, &pulling)
 		select {
 		case <-ctx.Done():
+		case <-a.recheck:
 		case <-time.After(20 * time.Second):
 		}
+	}
+}
+
+func (a *App) checkServices(ctx context.Context, pulling *atomic.Bool) {
+	cfg := a.conf()
+	if err := pingService(ctx, cfg.WhisperURL, "/docs"); err != nil {
+		a.setService("whisper", false, "not reachable: "+err.Error())
+	} else {
+		a.setService("whisper", true, "ready")
+	}
+	if cfg.OllamaURL == "" {
+		a.setService("llm", true, "not configured; announcements are read by pattern matching")
+	} else if has, err := ollamaHasModel(ctx, cfg); err != nil {
+		a.setService("llm", false, "not reachable: "+err.Error())
+	} else if !has {
+		a.setService("llm", false, "downloading model "+cfg.OllamaModel)
+		if pulling.CompareAndSwap(false, true) {
+			go func() {
+				defer pulling.Store(false)
+				if err := ollamaPull(cfg); err != nil {
+					log.Printf("pull %s: %v", cfg.OllamaModel, err)
+				}
+			}()
+		}
+	} else {
+		a.setService("llm", true, "model "+cfg.OllamaModel)
 	}
 }

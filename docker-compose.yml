@@ -1,42 +1,33 @@
-# Aural Organizer: the app, a Whisper speech-to-text service and an LLM.
-#   1. Set AUDIOBOOKS to your library folder (or edit the volume below).
-#   2. docker compose up -d          (pulls the published image)
-#      docker compose up -d --build  (builds from this folder instead)
-#   3. Open http://<this machine>:8078 and add /audiobooks (or a subfolder) as a library.
-# First start downloads the Whisper and LLM models, which takes a while.
+# Gutness: recognizes audiobooks by listening, then organizes them.
+#   1. Change /path/to/audiobooks below to your library folder.
+#   2. docker compose up -d
+#   3. Open http://<this machine>:8078 and press Scan on the Queue tab.
+# Everything else is set on the Settings tab. The first start downloads the
+# Whisper and LLM models, which takes a while.
 
 services:
-  aural:
+  gutness:
     image: ghcr.io/pmow/gutness:latest
-    build: .
     ports:
-      - "8078:8078"
-    volumes:
-      - ./data:/data                          # database, samples, undo journals
-      - ${AUDIOBOOKS:-./audiobooks}:/audiobooks # your library; needs write access for the final organize step
+      - "8078:8078"                   # keep both sides equal to GUTNESS_PORT
     environment:
-      LIBRARIES: /audiobooks                  # libraries to add on start (":"-separated); more can be added in the UI
-      WHISPER_URL: http://whisper:9000
-      WHISPER_LANGUAGE: en
-      OLLAMA_URL: http://ollama:11434         # remove to skip the LLM and use pattern matching
-      OLLAMA_MODEL: llama3.2:3b
-      # Sample lengths, methods and catalog limits are set on the Settings page.
-      LOOKUP_APIS: audible,openlibrary,googlebooks
-      AUDIBLE_REGION: com                     # com, co.uk, de, fr, ca, com.au, ...
-      # GOOGLE_BOOKS_API_KEY: ""              # optional; raises Google's daily limit
+      GUTNESS_PORT: "8078"            # the only setting outside the web UI
+    volumes:
+      - ./data:/data                  # database, samples, undo journals
+      - /path/to/audiobooks:/audiobooks # your library; needs write access to organize
     depends_on: [whisper, ollama]
     restart: unless-stopped
 
-  whisper:
+  whisper:                            # Settings > Services > Whisper URL: http://whisper:9000
     image: onerahmet/openai-whisper-asr-webservice:latest
     environment:
       ASR_ENGINE: faster_whisper
-      ASR_MODEL: base.en                      # tiny.en is faster, small.en more accurate
+      ASR_MODEL: base.en              # tiny.en is faster, small.en more accurate
     volumes:
       - whisper-cache:/root/.cache
     restart: unless-stopped
 
-  ollama:
+  ollama:                             # Settings > Services > LLM URL: http://ollama:11434
     image: ollama/ollama:latest
     volumes:
       - ollama:/root/.ollama

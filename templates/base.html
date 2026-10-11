@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Aural Organizer</title>
+<title>Gutness</title>
 <style>
 :root { --bg:#f7f6f2; --card:#fff; --fg:#1d1d1b; --mut:#6b6b66; --line:#ddd9d0; --ok:#1f7a3a; --warn:#9a5b00; --bad:#b3261e; --acc:#2d5bd7; }
 @media (prefers-color-scheme: dark) { :root { --bg:#141413; --card:#1d1d1b; --fg:#ecebe6; --mut:#9d9c96; --line:#34332f; --ok:#5cc27a; --warn:#e0a54a; --bad:#ff7b72; --acc:#7ea2ff; } }
@@ -56,11 +56,12 @@ legend { font-weight:600; padding:0 6px; }
 .row input[type=number] { width:90px; background:var(--card); color:inherit; border:1px solid var(--line); border-radius:5px; padding:5px 7px; font:inherit; }
 .check label { flex-direction:row; gap:6px; align-items:center; }
 .grid2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:12px; }
+pre.compose { background: var(--card, #fff); border: 1px solid #ddd; padding: 12px; overflow-x: auto; font-size: 12px; }
 </style>
 </head>
 <body><main>
 <header class="top">
-  <h1>Aural Organizer</h1>
+  <h1>Gutness</h1>
   <nav>
     <a href="/queue" class="{{if eq .Page_ "queue"}}on{{end}}">Queue</a>
     <a href="/completed" class="{{if eq .Page_ "completed"}}on{{end}}">Completed</a>

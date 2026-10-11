@@ -19,6 +19,23 @@
 
 <form method="post" action="/settings">
 <input type="hidden" name="token" value="{{.Token}}">
+<fieldset id="services"><legend>Services</legend>
+  <p class="mut" style="margin-top:0">Where the helper containers are. The defaults are the service names in the suggested <a href="#compose">docker compose file</a>.</p>
+  <div class="row">
+    <label>Whisper URL<input type="text" name="whisper_url" value="{{.S.Services.WhisperURL}}" style="width:240px"></label>
+    <label>Whisper language (blank = detect)<input type="text" name="language" value="{{.S.WhisperLanguage}}" size="6"></label>
+  </div>
+  <div class="row">
+    <label>LLM (Ollama) URL, blank for none<input type="text" name="ollama_url" value="{{.S.Services.OllamaURL}}" style="width:240px"></label>
+    <label>LLM model<input type="text" name="ollama_model" value="{{.S.Services.OllamaModel}}" style="width:160px"></label>
+  </div>
+  <div class="row">
+    <label>Audible region<select name="audible_region">{{range .Regions}}<option value="{{.}}" {{if eq . $.S.Services.AudibleRegion}}selected{{end}}>audible.{{.}}</option>{{end}}</select></label>
+    <label>Google Books API key (optional, raises the daily limit)<input type="text" name="google_key" value="{{.S.Services.GoogleKey}}" style="width:240px" autocomplete="off"></label>
+    <label>Rescan libraries every (hours, 0 = only on Scan)<input type="number" name="rescan_hours" min="0" value="{{.S.Services.RescanHours}}" style="width:80px"></label>
+  </div>
+</fieldset>
+
 <p class="mut">Recognition methods run in this order. When one can't identify a book, the next one takes over. Changes apply to each book from its next step.</p>
 
 <fieldset><legend>1. Title announcement</legend>
@@ -31,10 +48,10 @@
     <label>Show for review from (%)<input type="number" name="a_review" min="0" max="100" value="{{.S.Announce.ReviewPct}}"></label>
   </div>
   <div class="row check">Catalogs:
-    {{range .AnnounceCatalogs}}<label><input type="checkbox" name="a_catalogs" value="{{.}}" {{if has $.S.Announce.Catalogs .}}checked{{end}}> {{.}}</label>{{end}}
+    {{range .AnnounceCatalogs}}<label><input type="checkbox" name="a_catalogs" value="{{.}}" {{if has $.S.Announce.Catalogs .}}checked{{end}}> {{catalog .}}</label>{{end}}
   </div>
-  <div class="row check"><label><input type="checkbox" name="a_llm" {{if .S.Announce.UseLLM}}checked{{end}} {{if not .HasLLM}}disabled{{end}}>
-    Ask the LLM when the pattern doesn't find a title and author {{if .HasLLM}}<small>({{.LLMModel}})</small>{{else}}<small>(no LLM configured)</small>{{end}}</label></div>
+  <div class="row check"><label><input type="checkbox" name="a_llm" {{if .S.Announce.UseLLM}}checked{{end}}>
+    Ask the LLM when the pattern doesn't find a title and author {{if .HasLLM}}<small>({{.LLMModel}})</small>{{else}}<small>(no LLM URL set under Services)</small>{{end}}</label></div>
 </fieldset>
 
 <fieldset><legend>2. Text search</legend>
@@ -47,7 +64,7 @@
     <label>Max words per search<input type="number" name="t_words" min="10" value="{{.S.TextSearch.MaxWords}}"></label>
   </div>
   <div class="row check">Catalogs:
-    {{range .TextCatalogs}}<label><input type="checkbox" name="t_catalogs" value="{{.}}" {{if has $.S.TextSearch.Catalogs .}}checked{{end}}> {{.}}</label>{{end}}
+    {{range .TextCatalogs}}<label><input type="checkbox" name="t_catalogs" value="{{.}}" {{if has $.S.TextSearch.Catalogs .}}checked{{end}}> {{catalog .}}</label>{{end}}
   </div>
   <div class="row check"><label><input type="checkbox" name="t_single" {{if .S.TextSearch.AcceptSingle}}checked{{end}}> Count a single book found as matched (otherwise ask me to confirm)</label></div>
 </fieldset>
@@ -83,10 +100,12 @@
   </div>
 </fieldset>
 
-<fieldset><legend>Speech</legend>
-  <div class="row"><label>Whisper language (blank = detect)<input type="text" name="language" value="{{.S.WhisperLanguage}}" size="6"></label></div>
-</fieldset>
 <button class="primary">Save settings</button>
 </form>
 <form id="testform" method="get" action="/settings#paths"></form>
+
+<fieldset id="compose"><legend>Suggested docker compose file</legend>
+  <p class="mut" style="margin-top:0">Gutness with Whisper and an LLM. Change the <code>/path/to/audiobooks</code> line to your library; it appears as <code>/audiobooks</code> above. <code>GUTNESS_PORT</code> is the only environment setting.</p>
+  <pre class="compose">{{.Compose}}</pre>
+</fieldset>
 {{template "bottom" .}}

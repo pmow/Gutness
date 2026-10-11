@@ -163,9 +163,10 @@ func TestPipeline(t *testing.T) {
 	}}
 	app := &App{db: db, cfg: Config{DataDir: data}, apis: []*API{api}, limiter: NewLimiter(db, []*API{api}), token: "t",
 		services: map[string]*ServiceStatus{}, wake: make(chan struct{}, 1), scanning: map[int64]bool{}}
-	s := defaultSettings(Config{})
+	s := defaultSettings()
 	s.Announce.Catalogs = []string{"googlebooks"}
 	s.TextSearch.Catalogs = []string{"googlebooks"}
+	s.Services.OllamaURL = "" // pattern matching only
 	app.applySettings(s)
 	var mu sync.Mutex
 	heard := map[string]int{}

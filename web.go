@@ -18,6 +18,12 @@ import (
 	"time"
 )
 
+//go:embed docker-compose.yml
+var composeFile string
+
+// Regions the Audible catalog API serves.
+var audibleRegions = []string{"com", "co.uk", "ca", "com.au", "de", "fr", "it", "es", "in", "co.jp"}
+
 //go:embed templates/*.html
 var templateFS embed.FS
 
@@ -46,6 +52,9 @@ func newToken() string {
 
 func (a *App) templates() *template.Template {
 	return template.Must(template.New("").Funcs(template.FuncMap{
+		"catalog": func(name string) string {
+			return map[string]string{"audible": "Audible", "openlibrary": "Open Library", "googlebooks": "Google Books"}[name]
+		},
 		"label": func(s string) string {
 			if l, ok := statusLabels[s]; ok {
 				return l
@@ -504,7 +513,8 @@ func (a *App) settingsPage(w http.ResponseWriter, r *http.Request, render func(h
 	render(w, "settings.html", map[string]any{"S": s, "APIList": apis, "Msg": r.URL.Query().Get("msg"),
 		"RuleRows": rows, "Test": test, "TestPath": r.URL.Query().Get("test"),
 		"AnnounceCatalogs": methodCatalogs["announce"], "TextCatalogs": methodCatalogs["text_search"],
-		"HasLLM": a.cfg.OllamaURL != "", "LLMModel": a.cfg.OllamaModel})
+		"HasLLM": a.conf().OllamaURL != "", "LLMModel": a.conf().OllamaModel,
+		"Regions": audibleRegions, "Compose": composeFile})
 }
 
 func (a *App) settingsHandler(r *http.Request) (string, string) {
@@ -526,6 +536,13 @@ func (a *App) settingsHandler(r *http.Request) (string, string) {
 	s.TextSearch = TextSearchSettings{Enabled: on("t_enabled"), Seconds: num("t_seconds"), MiddlePct: num("t_middle"),
 		ExtraSamples: num("t_extra"), MaxWords: num("t_words"), Catalogs: pick("t_catalogs", methodCatalogs["text_search"]), AcceptSingle: on("t_single")}
 	s.WhisperLanguage = strings.TrimSpace(r.FormValue("language"))
+	s.Services = ServiceSettings{WhisperURL: strings.TrimSpace(r.FormValue("whisper_url")),
+		OllamaURL: strings.TrimSpace(r.FormValue("ollama_url")), OllamaModel: strings.TrimSpace(r.FormValue("ollama_model")),
+		AudibleRegion: r.FormValue("audible_region"), GoogleKey: strings.TrimSpace(r.FormValue("google_key")),
+		RescanHours: num("rescan_hours")}
+	if !contains1(audibleRegions, s.Services.AudibleRegion) {
+		s.Services.AudibleRegion = "com"
+	}
 	limits := map[string]string{}
 	for _, api := range a.apis {
 		limits[api.Name] = strings.ReplaceAll(r.FormValue("limit_"+api.Name), " ", "")
@@ -577,10 +594,23 @@ func (a *App) settingsHandler(r *http.Request) (string, string) {
 }
 
 // applySettings makes new settings live, including API limits.
+// conf is the service configuration from the current settings.
+func (a *App) conf() Config {
+	s := a.settings()
+	c := a.cfg
+	c.WhisperURL, c.OllamaURL, c.OllamaModel = s.Services.WhisperURL, s.Services.OllamaURL, s.Services.OllamaModel
+	c.AudibleRegion, c.GoogleKey = s.Services.AudibleRegion, s.Services.GoogleKey
+	return c
+}
+
 func (a *App) applySettings(s Settings) {
 	a.mu.Lock()
 	a.cur = s
 	a.mu.Unlock()
+	select {
+	case a.recheck <- struct{}{}:
+	default:
+	}
 	for _, api := range a.apis {
 		if spec, ok := s.Limits[api.Name]; ok && spec != "" {
 			if m, err := parseLimits(api.Name + "=" + spec); err == nil {
@@ -653,15 +683,21 @@ func (a *App) undoHandler(r *http.Request) (string, string) {
 }
 
 // rescanLoop keeps libraries current.
-func (a *App) rescanLoop(ctx context.Context, every time.Duration) {
+// It scans at start, then every RescanHours (checked each minute so a
+// settings change takes effect without a restart).
+func (a *App) rescanLoop(ctx context.Context) {
+	last := time.Time{}
 	for {
-		for _, l := range listLibraries(a.db) {
-			a.scanAsync(l.ID)
+		if h := a.settings().Services.RescanHours; last.IsZero() || (h > 0 && time.Since(last) >= time.Duration(h)*time.Hour) {
+			for _, l := range listLibraries(a.db) {
+				a.scanAsync(l.ID)
+			}
+			last = time.Now()
 		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(every):
+		case <-time.After(time.Minute):
 		}
 	}
 }

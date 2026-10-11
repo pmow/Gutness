@@ -94,26 +94,14 @@ func parseLimits(s string) (map[string][]Window, error) {
 	return out, nil
 }
 
-func buildAPIs(cfg Config) ([]*API, error) {
-	limits, err := parseLimits(cfg.Limits)
-	if err != nil {
-		return nil, err
+// buildAPIs makes the three catalogs. Region and key are read from the
+// current settings on every search.
+func buildAPIs(conf func() Config) []*API {
+	return []*API{
+		{Name: "audible", Label: "Audible catalog", Search: audibleSearch(func() string { return conf().AudibleRegion }), Windows: defaultLimits["audible"]},
+		{Name: "openlibrary", Label: "Open Library", Search: openLibrarySearch, Windows: defaultLimits["openlibrary"]},
+		{Name: "googlebooks", Label: "Google Books", Search: googleBooksSearch(func() string { return conf().GoogleKey }), Windows: defaultLimits["googlebooks"]},
 	}
-	all := map[string]*API{
-		"audible":     {Name: "audible", Label: "Audible catalog", Search: audibleSearch(cfg.AudibleRegion)},
-		"openlibrary": {Name: "openlibrary", Label: "Open Library", Search: openLibrarySearch},
-		"googlebooks": {Name: "googlebooks", Label: "Google Books", Search: googleBooksSearch(cfg.GoogleKey)},
-	}
-	var out []*API
-	for _, name := range cfg.APIs {
-		a, ok := all[strings.TrimSpace(name)]
-		if !ok {
-			return nil, fmt.Errorf("unknown API %q (have audible, openlibrary, googlebooks)", name)
-		}
-		a.Windows = limits[a.Name]
-		out = append(out, a)
-	}
-	return out, nil
 }
 
 // Limiter tracks calls per API, persisted so a restart keeps its budget.
@@ -290,11 +278,12 @@ func getJSON(ctx context.Context, u string, out any) error {
 	return json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out)
 }
 
-func audibleSearch(region string) func(context.Context, Query) ([]Candidate, error) {
-	if region == "" {
-		region = "com"
-	}
+func audibleSearch(regionOf func() string) func(context.Context, Query) ([]Candidate, error) {
 	return func(ctx context.Context, q Query) ([]Candidate, error) {
+		region := regionOf()
+		if region == "" {
+			region = "com"
+		}
 		v := url.Values{"num_results": {"5"}, "products_sort_by": {"Relevance"},
 			"response_groups": {"contributors,series,product_attrs,product_desc"}}
 		if q.Title != "" {
@@ -372,8 +361,9 @@ func openLibrarySearch(ctx context.Context, q Query) ([]Candidate, error) {
 	return cs, nil
 }
 
-func googleBooksSearch(key string) func(context.Context, Query) ([]Candidate, error) {
+func googleBooksSearch(keyOf func() string) func(context.Context, Query) ([]Candidate, error) {
 	return func(ctx context.Context, q Query) ([]Candidate, error) {
+		key := keyOf()
 		var terms []string
 		if q.FullText != "" {
 			// Google Books searches the text inside books as well as their details.
