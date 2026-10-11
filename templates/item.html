@@ -7,6 +7,9 @@
      {{if $it.Reason}}<br><span class="mut">{{$it.Reason}}</span>{{end}}</p>
   <p>{{if eq $it.Kind "set"}}Set of {{$it.Total}} files, part 1 is <b>{{index $it.Files 0}}</b>.{{else if eq $it.Kind "single"}}Single file <b>{{index $it.Files 0}}</b>.{{else}}{{len $it.Files}} audio files that are not a set.{{end}} {{mb $it.Bytes}}</p>
   {{if $it.Method}}<p><small>Current method: <b>{{method $it.Method}}</b></small></p>{{end}}
+  {{with $it.PathMatch}}<p><small>Path rule {{if .Rule}}<b>{{.Rule}}</b> read:</small> author <b>{{.Author}}</b>{{if .Series}}, series <b>{{.Series}}</b> {{.SeriesIndex}}{{end}}, title <b>{{.Title}}</b>{{if .Year}}, {{.Year}}{{end}}
+    {{if and .Author .Title}}<form method="post" action="/item/{{$it.ID}}/usepath" class="inline"><input type="hidden" name="token" value="{{$.Token}}"><button>Use these details</button></form>{{end}}
+    {{else}}no path rule matched{{if .Subject}} <code>{{.Subject}}</code>{{end}}.</small>{{end}}</p>{{end}}
 </div>
 
 <div class="grid2">

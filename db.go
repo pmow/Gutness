@@ -105,6 +105,7 @@ func OpenDB(path string) (*sql.DB, error) {
 		{"items", "method", "TEXT NOT NULL DEFAULT ''"},
 		{"items", "samples", "TEXT NOT NULL DEFAULT '[]'"},
 		{"items", "durations", "TEXT NOT NULL DEFAULT '[]'"},
+		{"items", "path_match", "TEXT NOT NULL DEFAULT '{}'"},
 		{"jobs", "method", "TEXT NOT NULL DEFAULT ''"},
 		{"jobs", "round", "INTEGER NOT NULL DEFAULT 0"},
 	} {
@@ -170,22 +171,23 @@ type Item struct {
 	Method                                             string
 	Samples                                            []SampleInfo
 	Durations                                          []float64
+	PathMatch                                          PathMatch
 	Created, Updated                                   int64
 }
 
 const itemCols = `id, library_id, folder, kind, total, files, bytes, reason, status, detail, attempts, next_at,
 	sample, transcript, guess, candidates, score, author, title, series, series_index, narrator, year, source, missing, created, updated,
-	method, samples, durations`
+	method, samples, durations, path_match`
 
 type scanner interface{ Scan(...any) error }
 
 func scanItem(r scanner) (*Item, error) {
 	var it Item
-	var files, guess, cands, samples, durs string
+	var files, guess, cands, samples, durs, pm string
 	err := r.Scan(&it.ID, &it.LibraryID, &it.Folder, &it.Kind, &it.Total, &files, &it.Bytes, &it.Reason, &it.Status,
 		&it.Detail, &it.Attempts, &it.NextAt, &it.Sample, &it.Transcript, &guess, &cands, &it.Score, &it.Author,
 		&it.Title, &it.Series, &it.SeriesIndex, &it.Narrator, &it.Year, &it.Source, &it.Missing, &it.Created, &it.Updated,
-		&it.Method, &samples, &durs)
+		&it.Method, &samples, &durs, &pm)
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +196,7 @@ func scanItem(r scanner) (*Item, error) {
 	json.Unmarshal([]byte(cands), &it.Candidates)
 	json.Unmarshal([]byte(samples), &it.Samples)
 	json.Unmarshal([]byte(durs), &it.Durations)
+	json.Unmarshal([]byte(pm), &it.PathMatch)
 	return &it, nil
 }
 
@@ -241,9 +244,9 @@ func (f ItemFilter) where() (string, []any) {
 		args = append(args, f.LibraryID)
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
-		conds = append(conds, `(folder LIKE ? OR title LIKE ? OR author LIKE ? OR transcript LIKE ?)`)
+		conds = append(conds, `(folder LIKE ? OR title LIKE ? OR author LIKE ? OR transcript LIKE ? OR path_match LIKE ?)`)
 		like := "%" + q + "%"
-		args = append(args, like, like, like, like)
+		args = append(args, like, like, like, like, like)
 	}
 	if len(conds) == 0 {
 		return "", args

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -138,6 +139,7 @@ func (a *App) Routes() http.Handler {
 	mux.HandleFunc("POST /item/{id}/accept", a.post(a.acceptHandler))
 	mux.HandleFunc("POST /item/{id}/edit", a.post(a.editHandler))
 	mux.HandleFunc("POST /item/{id}/retry", a.post(a.retryHandler))
+	mux.HandleFunc("POST /item/{id}/usepath", a.post(a.usePathHandler))
 	mux.HandleFunc("POST /organize", a.post(a.organizeHandler))
 	mux.HandleFunc("POST /undo", a.post(a.undoHandler))
 	return mux
@@ -397,6 +399,9 @@ func (a *App) scanAsync(id int64) {
 				} else {
 					log.Printf("scan %s: %s", l.Path, sum)
 				}
+				if err := applyPathRules(a.db, a.settings(), l.ID); err != nil {
+					log.Printf("path rules: %v", err)
+				}
 			}
 		}
 	}()
@@ -479,7 +484,27 @@ func (a *App) settingsPage(w http.ResponseWriter, r *http.Request, render func(h
 	for _, api := range a.apis {
 		apis = append(apis, map[string]any{"Name": api.Name, "Label": api.Label, "Limit": s.Limits[api.Name]})
 	}
+	// Editor rows: the rules plus three blank ones for new rules.
+	type ruleRow struct {
+		I    int
+		Rule PathRule
+	}
+	var rows []ruleRow
+	for i, r := range s.PathRules {
+		rows = append(rows, ruleRow{i, r})
+	}
+	for i := len(s.PathRules); i < len(s.PathRules)+3; i++ {
+		rows = append(rows, ruleRow{i, PathRule{Enabled: true}})
+	}
+	var test *PathMatch
+	if t := r.URL.Query().Get("test"); t != "" {
+		if rules, err := compilePathRules(s.PathRules); err == nil {
+			pm := matchPath(rules, filepath.ToSlash(t))
+			test = &pm
+		}
+	}
 	render(w, "settings.html", map[string]any{"S": s, "APIList": apis, "Msg": r.URL.Query().Get("msg"),
+		"RuleRows": rows, "Test": test, "TestPath": r.URL.Query().Get("test"),
 		"AnnounceCatalogs": methodCatalogs["announce"], "TextCatalogs": methodCatalogs["text_search"],
 		"HasLLM": a.cfg.OllamaURL != "", "LLMModel": a.cfg.OllamaModel})
 }
@@ -508,6 +533,37 @@ func (a *App) settingsHandler(r *http.Request) (string, string) {
 		limits[api.Name] = strings.ReplaceAll(r.FormValue("limit_"+api.Name), " ", "")
 	}
 	s.Limits = limits
+	type ordered struct {
+		order int
+		rule  PathRule
+	}
+	var rs []ordered
+	for i := 0; i < 200; i++ {
+		pat := strings.TrimSpace(r.FormValue(fmt.Sprintf("rule_pattern_%d", i)))
+		if _, present := r.Form[fmt.Sprintf("rule_order_%d", i)]; !present {
+			break
+		}
+		if pat == "" {
+			continue // a blank pattern deletes the rule
+		}
+		name := strings.TrimSpace(r.FormValue(fmt.Sprintf("rule_name_%d", i)))
+		if name == "" {
+			name = fmt.Sprintf("Rule %d", len(rs)+1)
+		}
+		order, err := strconv.Atoi(strings.TrimSpace(r.FormValue(fmt.Sprintf("rule_order_%d", i))))
+		if err != nil {
+			order = 1000 + i
+		}
+		rs = append(rs, ordered{order*1000 + i, PathRule{Name: name, Pattern: pat, Enabled: on(fmt.Sprintf("rule_enabled_%d", i))}})
+	}
+	sort.SliceStable(rs, func(i, j int) bool { return rs[i].order < rs[j].order })
+	s.PathRules = make([]PathRule, 0, len(rs))
+	for _, o := range rs {
+		s.PathRules = append(s.PathRules, o.rule)
+	}
+	s.PathMatchFull = on("path_full")
+	s.PathAccept = on("path_accept")
+	s.PathCrossCheck = on("path_cross")
 	if err := s.validate(); err != nil {
 		return "/settings", "Not saved: " + err.Error()
 	}
@@ -515,7 +571,12 @@ func (a *App) settingsHandler(r *http.Request) (string, string) {
 		return "/settings", err.Error()
 	}
 	a.applySettings(s)
-	return "/settings", "Saved. Changes apply to books from their next step on."
+	go func() {
+		if err := applyPathRules(a.db, s, 0); err != nil {
+			log.Printf("path rules: %v", err)
+		}
+	}()
+	return "/settings", "Saved. Path rules are being re-applied to every book; other changes apply from each book's next step."
 }
 
 // applySettings makes new settings live, including API limits.
@@ -613,4 +674,23 @@ func methodLabel(name string) string {
 		return m.Label()
 	}
 	return ""
+}
+
+func (a *App) usePathHandler(r *http.Request) (string, string) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	it, err := getItem(a.db, id)
+	if err != nil {
+		return "/", "item not found"
+	}
+	pm := it.PathMatch
+	if pm.Author == "" || pm.Title == "" {
+		return "", "the path rule did not give both an author and a title"
+	}
+	_, err = a.db.Exec(`UPDATE items SET status=?, detail=?, author=?, title=?, series=?, series_index=?, narrator=?, year=?,
+		source='path', updated=? WHERE id=?`, StMatched, "from path rule \""+pm.Rule+"\"",
+		pm.Author, pm.Title, pm.Series, pm.SeriesIndex, pm.Narrator, pm.Year, now(), id)
+	if err != nil {
+		return "", err.Error()
+	}
+	return fmt.Sprintf("/item/%d", id), "Saved the path details as matched."
 }

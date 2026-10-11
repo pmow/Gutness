@@ -109,6 +109,12 @@ func (a *App) settings() Settings {
 // cuts the audio that method asks for.
 func (a *App) doSample(ctx context.Context, it *Item) error {
 	s := a.settings()
+	if pm := it.PathMatch; s.PathAccept && it.Method == "" && pm.Author != "" && pm.Title != "" {
+		_, err := a.db.Exec(`UPDATE items SET status=?, detail=?, author=?, title=?, series=?, series_index=?, narrator=?, year=?,
+			source='path', attempts=0, updated=? WHERE id=?`, StMatched, "path rule \""+pm.Rule+"\" (listening skipped)",
+			pm.Author, pm.Title, pm.Series, pm.SeriesIndex, pm.Narrator, pm.Year, now(), it.ID)
+		return err
+	}
 	m := methodByName(it.Method)
 	if m == nil || !m.Enabled(s) {
 		if m = nextMethod(s, ""); m == nil {
@@ -348,7 +354,13 @@ func (a *App) finishIfDone(itemID int64) error {
 	case v.GiveUp:
 		return a.advance(it, v.Detail, v.Candidates)
 	case v.Status == StMatched:
-		return a.acceptCandidate(it, v.Candidates[0], "auto", v.Status, v.Detail, v.Candidates)
+		c := v.Candidates[0]
+		// A path rule that names a different book is worth a second look.
+		if pm := it.PathMatch; a.settings().PathCrossCheck && pm.Title != "" && dice(pm.Title, c.Title) < 0.5 {
+			return a.acceptCandidate(it, c, "auto", StReview,
+				fmt.Sprintf("listening says %q but the path says %q; please confirm", c.Title, pm.Title), v.Candidates)
+		}
+		return a.acceptCandidate(it, c, "auto", v.Status, v.Detail, v.Candidates)
 	}
 	score := 0.0
 	if len(v.Candidates) > 0 {

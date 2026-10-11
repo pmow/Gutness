@@ -34,6 +34,31 @@
   <div class="row check"><label><input type="checkbox" name="t_single" {{if .S.TextSearch.AcceptSingle}}checked{{end}}> Count a single book found as matched (otherwise ask me to confirm)</label></div>
 </fieldset>
 
+<fieldset id="paths"><legend>Path rules</legend>
+  <p class="mut" style="margin-top:0">Regular expressions tried in order against the path of each book's first file; the first that matches decides the author, title and series shown for the book. Use named groups <code>(?P&lt;author&gt;…)</code>, <code>(?P&lt;title&gt;…)</code> (required), <code>(?P&lt;series&gt;…)</code>, <code>(?P&lt;index&gt;…)</code>, <code>(?P&lt;narrator&gt;…)</code>, <code>(?P&lt;year&gt;…)</code>. Paths use <code>/</code>. Clear a pattern to delete its rule; change the order numbers to reorder.</p>
+  <div class="wrap"><table>
+  <tr><th>Order</th><th>On</th><th>Name</th><th>Pattern</th></tr>
+  {{range .RuleRows}}
+  <tr><td><input type="number" name="rule_order_{{.I}}" value="{{add .I 1}}" style="width:60px"></td>
+      <td><input type="checkbox" name="rule_enabled_{{.I}}" {{if .Rule.Enabled}}checked{{end}}></td>
+      <td><input type="text" name="rule_name_{{.I}}" value="{{.Rule.Name}}" placeholder="name" style="width:180px"></td>
+      <td><input type="text" name="rule_pattern_{{.I}}" value="{{.Rule.Pattern}}" placeholder="new rule" style="width:100%;min-width:320px;font-family:ui-monospace,monospace;font-size:12px"></td></tr>
+  {{end}}
+  </table></div>
+  <div class="row check">
+    <label><input type="checkbox" name="path_full" {{if .S.PathMatchFull}}checked{{end}}> Match the full path (otherwise the path inside the library, e.g. <code>Author/Series/01 - Title/Part 01 of 53.mp3</code>)</label>
+  </div>
+  <div class="row check">
+    <label><input type="checkbox" name="path_accept" {{if .S.PathAccept}}checked{{end}}> Accept a path match with author and title as matched, without listening</label>
+  </div>
+  <div class="row check">
+    <label><input type="checkbox" name="path_cross" {{if .S.PathCrossCheck}}checked{{end}}> When listening finds a different book than the path says, ask me instead of matching</label>
+  </div>
+  <div class="row"><label>Test a path against the saved rules<input type="text" name="test" form="testform" value="{{.TestPath}}" style="width:min(560px,90vw)" placeholder="Brandon Sanderson/Stormlight Archive/01 - The Way of Kings/Part 01 of 53.mp3"></label>
+    <button form="testform">Test</button></div>
+  {{with .Test}}<p>{{if .Rule}}Rule <b>{{.Rule}}</b> matched: author <b>{{.Author}}</b>{{if .Series}}, series <b>{{.Series}}</b> {{.SeriesIndex}}{{end}}, title <b>{{.Title}}</b>{{if .Narrator}}, narrator {{.Narrator}}{{end}}{{if .Year}}, year {{.Year}}{{end}}.{{else}}<span class="state bad">No rule matched.</span>{{end}}</p>{{end}}
+</fieldset>
+
 <fieldset><legend>Catalog limits</legend>
   <p class="mut" style="margin-top:0">Requests allowed per period, comma-separated, e.g. <code>1/2s,300/1h</code>. Searches wait in the queue until a slot is free. Units: s, m, h.</p>
   <div class="row">
@@ -46,4 +71,5 @@
 </fieldset>
 <button class="primary">Save settings</button>
 </form>
+<form id="testform" method="get" action="/settings#paths"></form>
 {{template "bottom" .}}

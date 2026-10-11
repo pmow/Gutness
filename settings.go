@@ -14,6 +14,12 @@ type Settings struct {
 	TextSearch      TextSearchSettings `json:"text_search"`
 	Limits          map[string]string  `json:"limits"` // per API, e.g. "1/2s,300/1h"
 	WhisperLanguage string             `json:"whisper_language"`
+
+	// Path rules: ordered regexes over the path of part 1; the first match wins.
+	PathRules      []PathRule `json:"path_rules"`
+	PathMatchFull  bool       `json:"path_match_full"`  // match the full path instead of the path inside the library
+	PathAccept     bool       `json:"path_accept"`      // treat a path match with author and title as matched, skipping listening
+	PathCrossCheck bool       `json:"path_cross_check"` // send audio matches that disagree with the path to review
 }
 
 // AnnounceSettings configure method 1: listen to the opening for
@@ -59,6 +65,8 @@ func defaultSettings(cfg Config) Settings {
 			Catalogs: []string{"googlebooks", "openlibrary"}, AcceptSingle: true},
 		Limits:          limits,
 		WhisperLanguage: cfg.WhisperLang,
+		PathRules:       defaultPathRules,
+		PathCrossCheck:  true,
 	}
 }
 
@@ -111,6 +119,9 @@ func (s Settings) validate() error {
 		return fmt.Errorf("extra samples must be 0 to 5")
 	case t.MaxWords < 10:
 		return fmt.Errorf("max words must be at least 10")
+	}
+	if _, err := compilePathRules(s.PathRules); err != nil {
+		return err
 	}
 	for name, spec := range s.Limits {
 		if _, err := parseLimits(name + "=" + spec); err != nil {

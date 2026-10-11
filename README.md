@@ -18,7 +18,16 @@ and an optional LLM (Ollama), all from `docker-compose.yml`. Web UI on port **80
    - **not a set**: anything else, with the reason shown (e.g. "names say 53
      parts but only 52 audio files are here; missing part 17"). These are
      listed but not sampled.
-2. **Recognize** with the enabled methods, in order. When one can't identify
+2. **Path rules.** An ordered list of regular expressions (Settings page) is
+   tried against the path of each book's first file; the first that matches
+   gives the author, title and series shown on the book. Named groups:
+   `author`, `title` (required), `series`, `index`, `narrator`, `year`.
+   Defaults cover `Author/Series/01 - Title/…`, `Author - Title (2021)/…` and
+   `Author/Title/…`. Options: match the full path instead of the path inside
+   the library; accept a path match without listening; and (on by default)
+   send a listening result that names a different book than the path to
+   review instead of matching it.
+3. **Recognize** with the enabled methods, in order. When one can't identify
    the book, the next takes over (`methods.go`; each method is a small Go type,
    so more can be added).
 
@@ -35,11 +44,11 @@ and an optional LLM (Ollama), all from `docker-compose.yml`. Web UI on port **80
    Open Library's "search inside" over Internet Archive scans). One book found
    is a match. Two or more: take another random 30 seconds and search with all
    60 seconds of words. Still several: you pick from the list.
-3. **Lookups are queued.** A background worker per catalog sends searches only
+4. **Lookups are queued.** A background worker per catalog sends searches only
    as fast as that catalog's limits allow and pauses on HTTP 429/503
    (honouring `Retry-After`, otherwise backing off 1, 5, 15, 60 minutes).
    Call history is stored, so a restart keeps the budget.
-4. **Organize (final step, manual).** Matched books move to
+5. **Organize (final step, manual).** Matched books move to
    `Author/Series/Vol N - Title` or `Author/Title` inside their library.
    Preview first, never overwrites, held on any conflict, undo from a journal.
 

@@ -33,7 +33,8 @@
 <tr>
   <td class="path"><a href="/item/{{.ID}}">{{rel (index $.Roots .LibraryID) .Folder}}</a>{{if .Missing}} <span class="pill error">gone</span>{{end}}</td>
   <td>{{if eq .Kind "set"}}set of {{.Total}}{{else if eq .Kind "single"}}single file{{else}}{{len .Files}} files{{end}}</td>
-  <td><span class="pill {{.Status}}">{{label .Status}}</span>{{if and (pending .Status) .Method}} <small>{{method .Method}}</small>{{end}}{{if .Detail}}<br><small>{{short .Detail 120}}</small>{{end}}{{if .Reason}}<br><small>{{.Reason}}</small>{{end}}</td>
+  <td><span class="pill {{.Status}}">{{label .Status}}</span>{{if and (pending .Status) .Method}} <small>{{method .Method}}</small>{{end}}{{if .Detail}}<br><small>{{short .Detail 120}}</small>{{end}}{{if .Reason}}<br><small>{{.Reason}}</small>{{end}}
+    {{with .PathMatch}}{{if .Rule}}<br><small title="path rule: {{.Rule}}">Path: <b>{{.Title}}</b>{{if .Author}} · {{.Author}}{{end}}{{if .Series}} · {{.Series}} {{.SeriesIndex}}{{end}}</small>{{end}}{{end}}</td>
   <td><small>{{short .Transcript 140}}</small></td>
   <td>{{if .Title}}<b>{{.Title}}</b><br><small>{{.Author}}{{if .Series}} · {{.Series}} {{.SeriesIndex}}{{end}}</small>{{else if .Candidates}}<small>best {{pct .Score}}: {{(index .Candidates 0).Title}}</small>{{end}}</td>
 </tr>

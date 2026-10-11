@@ -272,3 +272,41 @@ func TestTargetDir(t *testing.T) {
 		t.Error(got)
 	}
 }
+
+func TestPathRules(t *testing.T) {
+	rules, err := compilePathRules(defaultPathRules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ path, rule, author, series, index, title, year string }{
+		{"Brandon Sanderson/The Stormlight Archive/01 - The Way of Kings/Part 01 of 53.mp3", "Author/Series/# - Title", "Brandon Sanderson", "The Stormlight Archive", "01", "The Way of Kings", ""},
+		{"James S. A. Corey/The Expanse/Vol 3 - Abaddon's Gate/01 of 20.mp3", "Author/Series/# - Title", "James S. A. Corey", "The Expanse", "3", "Abaddon's Gate", ""},
+		{"Andy Weir - Project Hail Mary (2021)/1 of 2.mp3", "Author - Title folder", "Andy Weir", "", "", "Project Hail Mary", "2021"},
+		{"Frank Herbert/Dune/Dune.m4b", "Author/Title", "Frank Herbert", "", "", "Dune", ""},
+		{"loose.mp3", "", "", "", "", "", ""},
+	}
+	for _, c := range cases {
+		m := matchPath(rules, c.path)
+		if m.Rule != c.rule || m.Author != c.author || m.Series != c.series || m.SeriesIndex != c.index || m.Title != c.title || m.Year != c.year {
+			t.Errorf("%s: %+v", c.path, m)
+		}
+	}
+	// Order decides: a rule placed first wins even if a later one also matches.
+	custom := append([]PathRule{{Name: "everything", Enabled: true, Pattern: `^(?P<title>.+)$`}}, defaultPathRules...)
+	rules, _ = compilePathRules(custom)
+	if m := matchPath(rules, "Frank Herbert/Dune/Dune.m4b"); m.Rule != "everything" {
+		t.Errorf("first rule should win, got %q", m.Rule)
+	}
+	// Disabled rules are skipped; rules without a title group are rejected.
+	custom[0].Enabled = false
+	rules, _ = compilePathRules(custom)
+	if m := matchPath(rules, "Frank Herbert/Dune/Dune.m4b"); m.Rule != "Author/Title" {
+		t.Errorf("disabled rule used: %q", m.Rule)
+	}
+	if _, err := compilePathRules([]PathRule{{Name: "x", Pattern: `^(?P<author>.+)$`}}); err == nil {
+		t.Error("rule without title accepted")
+	}
+	if _, err := compilePathRules([]PathRule{{Name: "x", Pattern: `(`}}); err == nil {
+		t.Error("bad regex accepted")
+	}
+}
