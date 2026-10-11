@@ -1,72 +1,84 @@
-// Command aural organizes an audiobook library into Author/Series/Title
-// folders, with a preview before anything moves.
+// Command aural recognizes audiobooks by listening to them: it finds numbered
+// sets of audio files, transcribes a sample of part 1, looks the result up in
+// book catalogs through a rate-limited queue, and finally organizes matched
+// books into an Audiobookshelf-style folder layout.
 package main
 
 import (
+	"context"
 	"flag"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 )
 
-func main() {
-	addr := flag.String("addr", "127.0.0.1:8080", "address for the web UI")
-	source := flag.String("source", "", "audiobook library folder")
-	dest := flag.String("dest", "", "folder to organize into (default: the library folder)")
-	copyOnly := flag.Bool("copy", false, "copy instead of move")
-	planOnly := flag.Bool("plan", false, "print the plan for -source and exit without changing anything")
-	flag.Parse()
-	if *dest == "" {
-		*dest = *source
+func env(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
-
-	if *planOnly {
-		if err := printPlan(*source, *dest); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
-	app := NewApp(*source, *dest, *copyOnly)
-	if *source != "" {
-		app.rescan()
-	}
-	log.Printf("Aural Organizer at http://%s", *addr)
-	log.Fatal(http.ListenAndServe(*addr, app.Routes()))
+	return def
 }
 
-func printPlan(source, dest string) error {
-	s, err := Scan(source)
+func envInt(key string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(key)); err == nil {
+		return n
+	}
+	return def
+}
+
+func main() {
+	cfg := Config{
+		Addr:          env("AURAL_ADDR", ":8078"),
+		DataDir:       env("AURAL_DATA", "./data"),
+		SampleStart:   envInt("SAMPLE_START", 0),
+		SampleSeconds: envInt("SAMPLE_SECONDS", 30),
+		WhisperURL:    env("WHISPER_URL", "http://localhost:9000"),
+		WhisperLang:   env("WHISPER_LANGUAGE", "en"),
+		OllamaURL:     os.Getenv("OLLAMA_URL"),
+		OllamaModel:   env("OLLAMA_MODEL", "llama3.2:3b"),
+		GoogleKey:     os.Getenv("GOOGLE_BOOKS_API_KEY"),
+		AudibleRegion: env("AUDIBLE_REGION", "com"),
+		APIs:          strings.Split(env("LOOKUP_APIS", "audible,openlibrary,googlebooks"), ","),
+		Limits:        os.Getenv("API_LIMITS"),
+	}
+	flag.StringVar(&cfg.Addr, "addr", cfg.Addr, "listen address")
+	flag.StringVar(&cfg.DataDir, "data", cfg.DataDir, "folder for the database, samples and journals")
+	flag.Parse()
+
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		log.Fatal("ffmpeg is required and was not found on PATH")
+	}
+	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
+		log.Fatal(err)
+	}
+	db, err := OpenDB(filepath.Join(cfg.DataDir, "aural.db"))
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
-	if err := s.CheckCounts(); err != nil {
-		return err
+	apis, err := buildAPIs(cfg)
+	if err != nil {
+		log.Fatal(err)
 	}
-	p := BuildPlan(s, dest)
-	for _, bp := range p.Books {
-		status := "move "
-		switch {
-		case len(bp.Problems) > 0:
-			status = "HELD "
-		case bp.InPlace:
-			status = "ok   "
-		}
-		to := "?"
-		if bp.TargetDir != "" {
-			to, _ = filepath.Rel(p.Dest, bp.TargetDir)
-		}
-		fmt.Printf("%s %-50s -> %s\n", status, bp.Book.SourceRel, to)
-		for _, pr := range bp.Problems {
-			fmt.Printf("        held: %s\n", pr)
-		}
-		for _, w := range bp.Book.Warnings {
-			fmt.Printf("        check: %s\n", w)
+	app := &App{db: db, cfg: cfg, apis: apis, limiter: NewLimiter(db, apis), token: newToken(),
+		services: map[string]*ServiceStatus{}, wake: make(chan struct{}, 1), scanning: map[int64]bool{}}
+
+	// Library folders can be listed up front, e.g. LIBRARIES=/audiobooks/a:/audiobooks/b
+	for _, p := range filepath.SplitList(os.Getenv("LIBRARIES")) {
+		if p = strings.TrimSpace(p); p != "" {
+			if _, err := addLibrary(db, p); err != nil {
+				log.Printf("library %s: %v", p, err)
+			}
 		}
 	}
-	fmt.Printf("\n%d audio files in %d books: %d books to move (%d files), %d already in place, %d held (%d audio files). Leftover non-audio: %d\n",
-		s.AudioFiles, len(s.Books), p.BooksReady, p.FilesReady, p.BooksInPlace, p.BooksHeld, p.AudioHeld, len(s.Leftover))
-	return nil
+	ctx := context.Background()
+	app.Start(ctx)
+	go app.rescanLoop(ctx, time.Duration(envInt("RESCAN_HOURS", 6))*time.Hour)
+
+	log.Printf("Aural Organizer listening on %s (data in %s)", cfg.Addr, cfg.DataDir)
+	log.Fatal(http.ListenAndServe(cfg.Addr, app.Routes()))
 }

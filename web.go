@@ -1,281 +1,535 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
-	_ "embed"
+	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"html/template"
+	"log"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
+	"time"
 )
 
-//go:embed page.html
-var pageHTML string
+//go:embed templates/*.html
+var templateFS embed.FS
 
-type Edit struct {
-	Author, Series, Index, Title string
-	Skip                         bool
+var statusLabels = map[string]string{
+	"pending":           "Pending recognition",
+	StPendingSample:     "Waiting for sample",
+	StPendingTranscript: "Waiting for transcript",
+	StPendingExtract:    "Reading transcript",
+	StPendingLookup:     "Waiting for catalog search",
+	StMatched:           "Matched",
+	StReview:            "Needs review",
+	StNoMatch:           "No match",
+	StNotASet:           "Not a set",
+	StError:             "Error",
+	StOrganized:         "Organized",
+	"all":               "All",
 }
 
-type App struct {
-	mu       sync.Mutex
-	token    string
-	Source   string
-	Dest     string
-	CopyOnly bool
-	Scan     *ScanResult
-	edits    map[string]Edit
-	msg, err string
-	tmpl     *template.Template
-}
+var filterOrder = []string{"pending", StReview, StMatched, StNoMatch, StError, StNotASet, StOrganized, "all"}
 
-func NewApp(source, dest string, copyOnly bool) *App {
+func newToken() string {
 	b := make([]byte, 16)
 	rand.Read(b)
-	a := &App{Source: source, Dest: dest, CopyOnly: copyOnly, token: hex.EncodeToString(b), edits: map[string]Edit{}}
-	a.tmpl = template.Must(template.New("page").Funcs(template.FuncMap{
-		"rel": func(base, p string) string {
-			if r, err := filepath.Rel(base, p); err == nil && !strings.HasPrefix(r, "..") {
+	return hex.EncodeToString(b)
+}
+
+func (a *App) templates() *template.Template {
+	return template.Must(template.New("").Funcs(template.FuncMap{
+		"label": func(s string) string {
+			if l, ok := statusLabels[s]; ok {
+				return l
+			}
+			return s
+		},
+		"rel": func(root, p string) string {
+			if r, err := filepath.Rel(root, p); err == nil && !strings.HasPrefix(r, "..") {
 				return r
 			}
 			return p
 		},
-		"mb":   func(n int64) string { return fmt.Sprintf("%.1f MB", float64(n)/1e6) },
-		"len3": func(a, b, c int) int { return a + b + c },
-		"sub":  func(a, b int) int { return a - b },
-		"showTabs": func() map[string]string {
-			return map[string]string{"held": "Held for review", "ready": "Ready", "warn": "Worth checking", "all": "All"}
-		},
-	}).Parse(pageHTML))
-	return a
+		"pct":     func(f float64) string { return fmt.Sprintf("%.0f%%", f*100) },
+		"mb":      func(n int64) string { return fmt.Sprintf("%.1f MB", float64(n)/1e6) },
+		"ago":     ago,
+		"join":    strings.Join,
+		"short":   func(s string, n int) string { return short(s, n) },
+		"add":     func(a, b int) int { return a + b },
+		"json":    func(v any) template.JS { b, _ := json.Marshal(v); return template.JS(b) },
+		"qs":      qs,
+		"pending": func(s string) bool { return strings.HasPrefix(s, "pending_") },
+	}).ParseFS(templateFS, "templates/*.html"))
 }
 
-// applyEdits overlays the user's corrections on freshly scanned books.
-func (a *App) applyEdits() {
-	if a.Scan == nil {
-		return
+func short(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
 	}
-	for _, b := range a.Scan.Books {
-		e, ok := a.edits[b.ID]
-		if !ok {
-			continue
-		}
-		for _, f := range []struct {
-			dst  *string
-			val  string
-			name string
-		}{{&b.Author, e.Author, "author"}, {&b.Series, e.Series, "series"}, {&b.SeriesIndex, e.Index, "index"}, {&b.Title, e.Title, "title"}} {
-			if *f.dst != f.val {
-				*f.dst, b.From[f.name] = f.val, "edited"
-			}
-		}
-		b.Skip = e.Skip
-	}
+	return s
 }
 
-func (a *App) book(id string) *Book {
-	if a.Scan == nil {
-		return nil
+func ago(t int64) string {
+	if t == 0 {
+		return "never"
 	}
-	for _, b := range a.Scan.Books {
-		if b.ID == id {
-			return b
+	d := time.Since(time.Unix(t, 0)).Round(time.Second)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+}
+
+// qs builds a query string from key/value pairs, dropping empty values.
+func qs(kv ...any) string {
+	v := url.Values{}
+	for i := 0; i+1 < len(kv); i += 2 {
+		if s := fmt.Sprint(kv[i+1]); s != "" && s != "0" {
+			v.Set(fmt.Sprint(kv[i]), s)
 		}
 	}
-	return nil
+	if len(v) == 0 {
+		return ""
+	}
+	return "?" + v.Encode()
 }
 
 func (a *App) Routes() http.Handler {
+	t := a.templates()
+	render := func(w http.ResponseWriter, name string, data map[string]any) {
+		data["Token"] = a.token
+		data["Status"] = a.statusSnapshot()
+		data["Libraries"] = listLibraries(a.db)
+		data["Page_"] = strings.TrimSuffix(name, ".html")
+		data["Reload_"] = name == "list.html" || name == "queue.html"
+		if err := t.ExecuteTemplate(w, name, data); err != nil {
+			log.Printf("render %s: %v", name, err)
+		}
+	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", a.index)
-	mux.HandleFunc("POST /scan", a.post(a.scan))
-	mux.HandleFunc("POST /book/{id}", a.post(a.saveBook))
-	mux.HandleFunc("POST /lookup/{id}", a.post(a.lookup))
-	mux.HandleFunc("POST /apply", a.post(a.apply))
-	mux.HandleFunc("POST /undo", a.post(a.undo))
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) { a.listPage(w, r, render) })
+	mux.HandleFunc("GET /queue", func(w http.ResponseWriter, r *http.Request) { a.queuePage(w, r, render) })
+	mux.HandleFunc("GET /item/{id}", func(w http.ResponseWriter, r *http.Request) { a.itemPage(w, r, render) })
+	mux.HandleFunc("GET /organize", func(w http.ResponseWriter, r *http.Request) { a.organizePage(w, r, render) })
+	mux.HandleFunc("GET /sample/{id}", a.serveSample)
+	mux.HandleFunc("GET /status.json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(a.statusSnapshot())
+	})
+	mux.HandleFunc("POST /libraries", a.post(a.addLibraryHandler))
+	mux.HandleFunc("POST /libraries/{id}/scan", a.post(a.scanHandler))
+	mux.HandleFunc("POST /item/{id}/accept", a.post(a.acceptHandler))
+	mux.HandleFunc("POST /item/{id}/edit", a.post(a.editHandler))
+	mux.HandleFunc("POST /item/{id}/retry", a.post(a.retryHandler))
+	mux.HandleFunc("POST /organize", a.post(a.organizeHandler))
+	mux.HandleFunc("POST /undo", a.post(a.undoHandler))
 	return mux
 }
 
-// post checks the form token, runs h under the lock and redirects home.
-func (a *App) post(h func(r *http.Request)) http.HandlerFunc {
+// post checks the form token, runs h, and redirects back with its message.
+func (a *App) post(h func(r *http.Request) (back, msg string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.FormValue("token") != a.token {
-			http.Error(w, "stale or forged form; reload the page", http.StatusForbidden)
+			http.Error(w, "this form is stale; reload the page", http.StatusForbidden)
 			return
 		}
-		a.mu.Lock()
-		a.msg, a.err = "", ""
-		h(r)
-		a.mu.Unlock()
-		back := "/"
-		if s := r.FormValue("show"); s != "" {
-			back += "?show=" + s
+		back, msg := h(r)
+		if back == "" {
+			back = r.FormValue("back")
 		}
-		if id := r.PathValue("id"); id != "" {
-			back += "#b" + id
+		if back == "" || !strings.HasPrefix(back, "/") || strings.HasPrefix(back, "//") {
+			back = "/"
+		}
+		if msg != "" {
+			sep := "?"
+			if strings.Contains(back, "?") {
+				sep = "&"
+			}
+			back += sep + "msg=" + url.QueryEscape(msg)
 		}
 		http.Redirect(w, r, back, http.StatusSeeOther)
 	}
 }
 
-func (a *App) rescan() {
-	s, err := Scan(a.Source)
-	if err != nil {
-		a.Scan, a.err = nil, err.Error()
-		return
-	}
-	a.Scan = s
-	a.applyEdits()
-	if err := s.CheckCounts(); err != nil {
-		a.err = "count check failed: " + err.Error()
-	}
+// --- status bar data ---
+
+type APIStatus struct {
+	Name, Label, Why, LastError string
+	ReadyAt, LastOK             int64 // unix ms
+	Usage                       []string
+	Queued, Running, Failed     int
 }
 
-func (a *App) scan(r *http.Request) {
-	a.Source = strings.TrimSpace(r.FormValue("source"))
-	a.Dest = strings.TrimSpace(r.FormValue("dest"))
-	a.CopyOnly = r.FormValue("copy") == "on"
-	if a.Dest == "" {
-		a.Dest = a.Source
-	}
-	a.rescan()
-	if a.Scan != nil && a.err == "" {
-		a.msg = fmt.Sprintf("Scanned %s: %d audio files in %d books.", a.Scan.Root, a.Scan.AudioFiles, len(a.Scan.Books))
-	}
+type StatusSnapshot struct {
+	Now      int64 // unix ms
+	Services []ServiceStatus
+	APIs     []APIStatus
+	Counts   map[string]int
+	Scanning bool
 }
 
-func (a *App) saveBook(r *http.Request) {
-	b := a.book(r.PathValue("id"))
-	if b == nil {
-		a.err = "that book is no longer in the scan; scan again"
-		return
-	}
-	a.edits[b.ID] = Edit{
-		Author: clean(r.FormValue("author")), Series: clean(r.FormValue("series")),
-		Index: clean(r.FormValue("index")), Title: clean(r.FormValue("title")),
-		Skip: r.FormValue("skip") == "on",
-	}
-	a.applyEdits()
-}
-
-func (a *App) lookup(r *http.Request) {
-	b := a.book(r.PathValue("id"))
-	if b == nil {
-		a.err = "that book is no longer in the scan; scan again"
-		return
-	}
-	s, err := LookupOpenLibrary(r.Context(), b.Title, b.Author)
-	if err != nil {
-		a.err = "Lookup for \"" + b.Title + "\": " + err.Error() + ". Nothing was changed."
-		return
-	}
-	e := Edit{Author: b.Author, Series: b.Series, Index: b.SeriesIndex, Title: b.Title, Skip: b.Skip}
-	if e.Author == "" {
-		e.Author = s.Author
-	}
-	if e.Title == "" {
-		e.Title = s.Title
-	}
-	a.edits[b.ID] = e
-	a.applyEdits()
-	if b.Year == "" && s.Year != "" {
-		b.Year, b.From["year"] = s.Year, "online"
-	}
-	a.msg = fmt.Sprintf("Open Library suggests \"%s\" by %s (%s). Blank fields were filled; edit the row if the rest differs.", s.Title, s.Author, s.Year)
-}
-
-func (a *App) apply(r *http.Request) {
-	if a.Scan == nil {
-		a.err = "scan first"
-		return
-	}
-	if r.FormValue("confirm") != "on" {
-		a.err = "tick the confirmation box to apply the plan"
-		return
-	}
-	a.rescan() // the disk may have changed since the preview
-	if a.Scan == nil || a.err != "" {
-		return
-	}
-	plan := BuildPlan(a.Scan, a.Dest)
-	if fmt.Sprint(plan.FilesReady) != r.FormValue("expect") {
-		a.err = "the library changed since you looked at the preview; review the updated plan and apply again"
-		return
-	}
-	res, err := Apply(plan, a.Scan.Root, a.CopyOnly)
-	if err != nil {
-		a.err = err.Error()
-		return
-	}
-	verb := "Moved"
-	if a.CopyOnly {
-		verb = "Copied"
-	}
-	a.msg = fmt.Sprintf("%s %d files for %d books. Journal: %s", verb, res.Moved+res.Copied, res.BooksDone, res.Journal)
-	if len(res.Failed) > 0 {
-		a.err = fmt.Sprintf("%d files failed and were left in place: %s", len(res.Failed), strings.Join(res.Failed, "; "))
-	}
-	a.rescan()
-}
-
-func (a *App) undo(r *http.Request) {
-	j := r.FormValue("journal")
-	ok := false
-	for _, k := range Journals(a.Dest) {
-		ok = ok || k == j
-	}
-	if !ok {
-		a.err = "unknown journal"
-		return
-	}
-	n, failed, err := Undo(j)
-	if err != nil {
-		a.err = err.Error()
-		return
-	}
-	a.msg = fmt.Sprintf("Undo restored %d files.", n)
-	if len(failed) > 0 {
-		a.err = fmt.Sprintf("%d files could not be restored: %s", len(failed), strings.Join(failed, "; "))
-	}
-	if a.Scan != nil {
-		a.rescan()
-	}
-}
-
-type pageData struct {
-	A        *App
-	Token    string
-	Plan     *Plan
-	Rows     []BookPlan
-	Show     string
-	Journals []string
-	Msg, Err string
-}
-
-func (a *App) index(w http.ResponseWriter, r *http.Request) {
+func (a *App) statusSnapshot() StatusSnapshot {
+	t := time.Now()
+	s := StatusSnapshot{Now: t.UnixMilli(), Counts: statusCounts(a.db, 0)}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	d := pageData{A: a, Token: a.token, Show: r.URL.Query().Get("show"), Msg: a.msg, Err: a.err}
-	if d.Show == "" {
-		d.Show = "held"
+	for _, name := range []string{"whisper", "llm"} {
+		if st := a.services[name]; st != nil {
+			s.Services = append(s.Services, *st)
+		} else {
+			s.Services = append(s.Services, ServiceStatus{Name: name, Detail: "checking…"})
+		}
 	}
-	if a.Scan != nil {
-		d.Plan = BuildPlan(a.Scan, a.Dest)
-		for _, bp := range d.Plan.Books {
-			held := !bp.Ready() && !(bp.InPlace && len(bp.Problems) == 0)
-			if d.Show == "all" || (d.Show == "ready" && bp.Ready()) || (d.Show == "held" && held) ||
-				(d.Show == "warn" && len(bp.Book.Warnings) > 0) {
-				d.Rows = append(d.Rows, bp)
+	s.Scanning = len(a.scanning) > 0
+	a.mu.Unlock()
+	for _, api := range a.apis {
+		ready, why := a.limiter.ReadyAt(api, t)
+		lastErr, lastOK := a.limiter.Info(api.Name)
+		as := APIStatus{Name: api.Name, Label: api.Label, Why: why, ReadyAt: ready.UnixMilli(), Usage: a.limiter.Usage(api, t), LastError: lastErr}
+		if !lastOK.IsZero() {
+			as.LastOK = lastOK.UnixMilli()
+		}
+		rows, err := a.db.Query(`SELECT status, COUNT(*) FROM jobs WHERE api=? GROUP BY status`, api.Name)
+		if err == nil {
+			for rows.Next() {
+				var st string
+				var n int
+				rows.Scan(&st, &n)
+				switch st {
+				case "queued":
+					as.Queued = n
+				case "running":
+					as.Running = n
+				case "failed":
+					as.Failed = n
+				}
+			}
+			rows.Close()
+		}
+		s.APIs = append(s.APIs, as)
+	}
+	return s
+}
+
+// --- pages ---
+
+const pageSize = 100
+
+func (a *App) listPage(w http.ResponseWriter, r *http.Request, render func(http.ResponseWriter, string, map[string]any)) {
+	q := r.URL.Query()
+	f := ItemFilter{Status: q.Get("status"), Query: q.Get("q"), Limit: pageSize}
+	if f.Status == "" {
+		f.Status = "pending"
+	}
+	f.LibraryID, _ = strconv.ParseInt(q.Get("lib"), 10, 64)
+	page, _ := strconv.Atoi(q.Get("page"))
+	f.Offset = max(page, 0) * pageSize
+	items, total, err := listItems(a.db, f)
+	msg := q.Get("msg")
+	if err != nil {
+		msg = err.Error()
+	}
+	libRoots := map[int64]string{}
+	for _, l := range listLibraries(a.db) {
+		libRoots[l.ID] = l.Path
+	}
+	render(w, "list.html", map[string]any{
+		"Items": items, "Total": total, "Filter": f, "Page": page, "PageSize": pageSize,
+		"Filters": filterOrder, "Counts": statusCounts(a.db, f.LibraryID), "Msg": msg, "Roots": libRoots,
+		"HasMore": f.Offset+len(items) < total,
+	})
+}
+
+func (a *App) queuePage(w http.ResponseWriter, r *http.Request, render func(http.ResponseWriter, string, map[string]any)) {
+	q := r.URL.Query()
+	st, api := q.Get("status"), q.Get("api")
+	if st == "" {
+		st = "queued"
+	}
+	where, args := []string{"1=1"}, []any{}
+	if st != "all" {
+		where, args = append(where, "j.status=?"), append(args, st)
+	}
+	if api != "" {
+		where, args = append(where, "j.api=?"), append(args, api)
+	}
+	rows, err := a.db.Query(`SELECT j.id, j.item_id, j.api, j.status, j.query, j.attempts, j.next_at, j.error, j.result, j.created, j.updated, i.folder
+		FROM jobs j JOIN items i ON i.id=j.item_id WHERE `+strings.Join(where, " AND ")+` ORDER BY j.next_at, j.id LIMIT 500`, args...)
+	var jobs []Job
+	if err == nil {
+		for rows.Next() {
+			var j Job
+			var qstr, res string
+			rows.Scan(&j.ID, &j.ItemID, &j.API, &j.Status, &qstr, &j.Attempts, &j.NextAt, &j.Error, &res, &j.Created, &j.Updated, &j.Folder)
+			jsonUnmarshal(qstr, &j.Query)
+			var cs []Candidate
+			jsonUnmarshal(res, &cs)
+			j.Results = len(cs)
+			jobs = append(jobs, j)
+		}
+		rows.Close()
+	}
+	counts := map[string]int{}
+	cr, err := a.db.Query(`SELECT status, COUNT(*) FROM jobs GROUP BY status`)
+	if err == nil {
+		for cr.Next() {
+			var s string
+			var n int
+			cr.Scan(&s, &n)
+			counts[s] = n
+			counts["all"] += n
+		}
+		cr.Close()
+	}
+	render(w, "queue.html", map[string]any{"Jobs": jobs, "JobStatus": st, "API": api, "APIs": a.apis,
+		"JobCounts": counts, "JobFilters": []string{"queued", "running", "failed", "done", "all"}, "Msg": q.Get("msg"), "NowUnix": now()})
+}
+
+func (a *App) itemPage(w http.ResponseWriter, r *http.Request, render func(http.ResponseWriter, string, map[string]any)) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	it, err := getItem(a.db, id)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	var root string
+	a.db.QueryRow(`SELECT path FROM libraries WHERE id=?`, it.LibraryID).Scan(&root)
+	var target string
+	if it.Author != "" && it.Title != "" {
+		target = TargetDir(root, it)
+	}
+	render(w, "item.html", map[string]any{"Item": it, "Root": root, "Target": target, "Msg": r.URL.Query().Get("msg")})
+}
+
+func (a *App) serveSample(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	it, err := getItem(a.db, id)
+	if err != nil || it.Sample == "" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	http.ServeFile(w, r, it.Sample)
+}
+
+func (a *App) organizeItems(lib int64) ([]*Item, map[int64]string) {
+	items, _, _ := listItems(a.db, ItemFilter{Status: StMatched, LibraryID: lib, Limit: 100000})
+	roots := map[int64]string{}
+	for _, l := range listLibraries(a.db) {
+		roots[l.ID] = l.Path
+	}
+	return items, roots
+}
+
+func (a *App) organizePage(w http.ResponseWriter, r *http.Request, render func(http.ResponseWriter, string, map[string]any)) {
+	lib, _ := strconv.ParseInt(r.URL.Query().Get("lib"), 10, 64)
+	items, roots := a.organizeItems(lib)
+	plans := PlanOrganize(items, roots)
+	var ready, files int
+	var bytes int64
+	for _, p := range plans {
+		if p.Ready() {
+			ready++
+			files += len(p.Moves)
+			for _, m := range p.Moves {
+				bytes += m.Bytes
 			}
 		}
 	}
-	if a.Dest != "" {
-		d.Journals = Journals(a.Dest)
+	render(w, "organize.html", map[string]any{"Plans": plans, "Ready": ready, "Files": files, "Bytes": bytes,
+		"Lib": lib, "Journals": Journals(a.cfg.DataDir), "Msg": r.URL.Query().Get("msg")})
+}
+
+// --- actions ---
+
+func (a *App) addLibraryHandler(r *http.Request) (string, string) {
+	id, err := addLibrary(a.db, r.FormValue("path"))
+	if err != nil {
+		return "", err.Error()
 	}
-	if err := a.tmpl.Execute(w, d); err != nil {
-		http.Error(w, err.Error(), 500)
+	a.scanAsync(id)
+	return "/" + qs("lib", id, "status", "all"), "Library added; scanning it now."
+}
+
+func (a *App) scanHandler(r *http.Request) (string, string) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	a.scanAsync(id)
+	return "", "Scanning. Counts update when it finishes."
+}
+
+func (a *App) scanAsync(id int64) {
+	a.mu.Lock()
+	if a.scanning[id] {
+		a.mu.Unlock()
+		return
+	}
+	a.scanning[id] = true
+	a.mu.Unlock()
+	go func() {
+		defer func() {
+			a.mu.Lock()
+			delete(a.scanning, id)
+			a.mu.Unlock()
+		}()
+		for _, l := range listLibraries(a.db) {
+			if l.ID == id {
+				sum, err := ScanLibrary(a.db, l)
+				if err != nil {
+					log.Printf("scan %s: %v", l.Path, err)
+				} else {
+					log.Printf("scan %s: %s", l.Path, sum)
+				}
+			}
+		}
+	}()
+}
+
+func (a *App) acceptHandler(r *http.Request) (string, string) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	it, err := getItem(a.db, id)
+	if err != nil {
+		return "/", "item not found"
+	}
+	n, err := strconv.Atoi(r.FormValue("candidate"))
+	if err != nil || n < 0 || n >= len(it.Candidates) {
+		return "", "pick one of the listed matches"
+	}
+	c := it.Candidates[n]
+	if err := a.acceptCandidate(it, c, "user", StMatched, "confirmed by you: "+c.API, nil); err != nil {
+		return "", err.Error()
+	}
+	return fmt.Sprintf("/item/%d", id), "Saved. It is now matched and will appear in the final organize step."
+}
+
+func (a *App) editHandler(r *http.Request) (string, string) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	f := func(k string) string { return strings.Join(strings.Fields(r.FormValue(k)), " ") }
+	if f("author") == "" || f("title") == "" {
+		return "", "author and title are both needed"
+	}
+	_, err := a.db.Exec(`UPDATE items SET author=?, title=?, series=?, series_index=?, narrator=?, status=?, detail=?, source='manual', updated=? WHERE id=?`,
+		f("author"), f("title"), f("series"), f("series_index"), f("narrator"), StMatched, "entered by you", now(), id)
+	if err != nil {
+		return "", err.Error()
+	}
+	return fmt.Sprintf("/item/%d", id), "Saved as matched."
+}
+
+func (a *App) retryHandler(r *http.Request) (string, string) {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	it, err := getItem(a.db, id)
+	if err != nil {
+		return "/", "item not found"
+	}
+	switch r.FormValue("from") {
+	case "sample":
+		setStatus(a.db, id, StPendingSample, "")
+	case "transcript":
+		if it.Sample == "" {
+			return "", "no sample yet"
+		}
+		setStatus(a.db, id, StPendingTranscript, "")
+	case "lookup":
+		if it.Transcript == "" {
+			return "", "no transcript yet"
+		}
+		g := it.Guess
+		if t := strings.TrimSpace(r.FormValue("title")); t != "" || r.FormValue("author") != "" {
+			g = Guess{Title: t, Author: strings.TrimSpace(r.FormValue("author")), Narrator: g.Narrator, Series: g.Series, SeriesIndex: g.SeriesIndex, Method: "manual"}
+		}
+		if err := a.queueLookups(id, g, it.Transcript); err != nil {
+			return "", err.Error()
+		}
+		a.poke()
+	default:
+		return "", "unknown step"
+	}
+	return fmt.Sprintf("/item/%d", id), "Queued again."
+}
+
+func (a *App) organizeHandler(r *http.Request) (string, string) {
+	lib, _ := strconv.ParseInt(r.FormValue("lib"), 10, 64)
+	items, roots := a.organizeItems(lib)
+	plans := PlanOrganize(items, roots)
+	files := 0
+	for _, p := range plans {
+		if p.Ready() {
+			files += len(p.Moves)
+		}
+	}
+	if r.FormValue("confirm") != "on" {
+		return "", "tick the box to confirm"
+	}
+	if strconv.Itoa(files) != r.FormValue("expect") {
+		return "", "the plan changed since you looked at it; check it again"
+	}
+	res, err := Apply(plans, a.cfg.DataDir)
+	if err != nil {
+		return "", err.Error()
+	}
+	for _, p := range plans {
+		for _, id := range res.Items {
+			if p.Item.ID == id {
+				a.db.Exec(`UPDATE items SET folder=?, status=?, detail=?, updated=? WHERE id=?`,
+					p.TargetDir, StOrganized, "moved from "+p.Item.Folder, now(), id)
+			}
+		}
+	}
+	msg := fmt.Sprintf("Moved %d files for %d books.", res.Moved, len(res.Items))
+	if len(res.Failed) > 0 {
+		msg += fmt.Sprintf(" %d files failed and stayed put: %s", len(res.Failed), strings.Join(res.Failed, "; "))
+	}
+	return "/organize" + qs("lib", lib), msg
+}
+
+func (a *App) undoHandler(r *http.Request) (string, string) {
+	j := r.FormValue("journal")
+	known := false
+	for _, k := range Journals(a.cfg.DataDir) {
+		known = known || k == j
+	}
+	if !known {
+		return "/organize", "unknown journal"
+	}
+	restored, failed, err := Undo(j)
+	if err != nil {
+		return "/organize", err.Error()
+	}
+	done := map[int64]string{}
+	for _, e := range restored {
+		done[e.Item] = e.Folder
+	}
+	for id, folder := range done {
+		a.db.Exec(`UPDATE items SET folder=?, status=?, detail='organize undone', updated=? WHERE id=?`, folder, StMatched, now(), id)
+	}
+	msg := fmt.Sprintf("Undo put back %d files.", len(restored))
+	if len(failed) > 0 {
+		msg += fmt.Sprintf(" %d could not be restored: %s", len(failed), strings.Join(failed, "; "))
+	}
+	return "/organize", msg
+}
+
+// rescanLoop keeps libraries current.
+func (a *App) rescanLoop(ctx context.Context, every time.Duration) {
+	for {
+		for _, l := range listLibraries(a.db) {
+			a.scanAsync(l.ID)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(every):
+		}
 	}
 }

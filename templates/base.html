@@ -1,0 +1,102 @@
+{{define "top"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aural Organizer</title>
+<style>
+:root { --bg:#f7f6f2; --card:#fff; --fg:#1d1d1b; --mut:#6b6b66; --line:#ddd9d0; --ok:#1f7a3a; --warn:#9a5b00; --bad:#b3261e; --acc:#2d5bd7; }
+@media (prefers-color-scheme: dark) { :root { --bg:#141413; --card:#1d1d1b; --fg:#ecebe6; --mut:#9d9c96; --line:#34332f; --ok:#5cc27a; --warn:#e0a54a; --bad:#ff7b72; --acc:#7ea2ff; } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, sans-serif; }
+main { max-width:1280px; margin:0 auto; padding:16px; }
+a { color:var(--acc); }
+header.top { display:flex; flex-wrap:wrap; gap:6px 18px; align-items:baseline; margin-bottom:12px; }
+header.top h1 { font-size:19px; margin:0 8px 0 0; }
+header.top nav a { margin-right:14px; text-decoration:none; }
+header.top nav a.on { color:var(--fg); font-weight:600; }
+.bar { display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:10px; margin-bottom:14px; }
+.svc { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; }
+.svc b { font-size:14px; }
+.svc .state { font-weight:600; }
+.svc .state.ok { color:var(--ok); } .svc .state.wait { color:var(--warn); } .svc .state.bad { color:var(--bad); }
+.svc .timer { font-variant-numeric:tabular-nums; font-size:18px; font-weight:600; }
+.mut, small { color:var(--mut); }
+.msg { padding:8px 12px; border-radius:6px; margin:0 0 12px; border:1px solid var(--acc); background:var(--card); }
+.tabs { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 10px; }
+.tabs a { padding:4px 10px; border:1px solid var(--line); border-radius:14px; text-decoration:none; color:var(--fg); background:var(--card); font-size:13px; }
+.tabs a.on { background:var(--acc); color:#fff; border-color:var(--acc); }
+form.inline { display:inline; }
+input[type=text], input[type=search], select { background:var(--card); color:inherit; border:1px solid var(--line); border-radius:5px; padding:5px 7px; font:inherit; }
+button { font:inherit; padding:4px 10px; border-radius:5px; border:1px solid var(--line); background:var(--card); color:inherit; cursor:pointer; }
+button.primary { background:var(--acc); color:#fff; border-color:var(--acc); }
+table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+th, td { text-align:left; padding:7px 9px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { font-size:12px; color:var(--mut); font-weight:600; }
+td.path { font-family:ui-monospace, monospace; font-size:12px; word-break:break-word; min-width:160px; }
+.pill { display:inline-block; font-size:11px; padding:1px 7px; border-radius:9px; border:1px solid var(--line); white-space:nowrap; }
+.pill.matched, .pill.organized { color:var(--ok); border-color:var(--ok); }
+.pill.review { color:var(--warn); border-color:var(--warn); }
+.pill.error, .pill.no_match { color:var(--bad); border-color:var(--bad); }
+.wrap { overflow-x:auto; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
+.grid2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:12px; }
+</style>
+</head>
+<body><main>
+<header class="top">
+  <h1>Aural Organizer</h1>
+  <nav>
+    <a href="/" class="{{if eq .Page_ "list"}}on{{end}}">Books</a>
+    <a href="/queue" class="{{if eq .Page_ "queue"}}on{{end}}">Lookup queue</a>
+    <a href="/organize" class="{{if eq .Page_ "organize"}}on{{end}}">Organize (final step)</a>
+  </nav>
+  <label class="mut"><input type="checkbox" id="live" checked> live updates</label>
+</header>
+<div class="bar" id="bar"></div>
+{{if .Msg}}<div class="msg">{{.Msg}}</div>{{end}}
+{{end}}
+
+{{define "bottom"}}
+<script>
+let S = {{json .Status}};
+let skew = Date.now() - S.Now;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function dur(ms) {
+  const s = Math.ceil(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), r = s % 60;
+  return (h ? h + "h " : "") + (h || m ? String(m).padStart(h ? 2 : 1, "0") + "m " : "") + String(r).padStart(2, "0") + "s";
+}
+function render() {
+  const t = Date.now() - skew;
+  let h = "";
+  for (const s of S.Services) {
+    const name = s.Name === "llm" ? "LLM" : "Whisper";
+    h += `<div class="svc"><b>${name}</b><br><span class="state ${s.OK ? "ok" : "bad"}">${s.OK ? "Up" : "Down"}</span> <span class="mut">${esc(s.Detail)}</span></div>`;
+  }
+  for (const a of S.APIs) {
+    const wait = a.ReadyAt - t;
+    const state = wait > 500
+      ? `<span class="state wait">Ready in</span> <span class="timer">${dur(wait)}</span><br><span class="mut">${esc(a.Why)}</span>`
+      : `<span class="state ok">Ready</span>`;
+    h += `<div class="svc"><b>${esc(a.Label)}</b><br>${state}<br>
+      <span class="mut">${a.Usage.map(esc).join(" · ")}</span><br>
+      <a href="/queue?api=${a.Name}">${a.Queued} queued</a>${a.Running ? ` · ${a.Running} running` : ""}${a.Failed ? ` · <a href="/queue?api=${a.Name}&status=failed">${a.Failed} failed</a>` : ""}
+      ${a.LastError ? `<br><span class="state bad" title="${esc(a.LastError)}">Last error: ${esc(a.LastError.slice(0, 80))}</span>` : ""}</div>`;
+  }
+  document.getElementById("bar").innerHTML = h;
+}
+render();
+setInterval(render, 1000);
+setInterval(async () => {
+  if (!document.getElementById("live").checked) return;
+  try { const r = await fetch("/status.json"); S = await r.json(); skew = Date.now() - S.Now; render(); } catch (e) {}
+}, 5000);
+{{if .Reload_}}
+setInterval(() => {
+  const busy = document.activeElement && ["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName);
+  if (document.getElementById("live").checked && !busy) location.reload();
+}, 20000);
+{{end}}
+</script>
+</main></body></html>
+{{end}}

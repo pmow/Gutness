@@ -14,66 +14,57 @@ import (
 )
 
 type ApplyResult struct {
-	Journal      string
-	Moved        int
-	Copied       int
-	Failed       []string
-	BooksDone    int
-	BooksPartial int
+	Journal string
+	Moved   int
+	Failed  []string
+	Items   []int64 // items whose files all moved
 }
 
 type journalEntry struct {
-	Op   string `json:"op"` // "move" or "copy"
-	From string `json:"from"`
-	To   string `json:"to"`
+	Op     string `json:"op"` // "move"
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Item   int64  `json:"item,omitempty"`
+	Folder string `json:"folder,omitempty"` // the item's folder before the move
+	Root   string `json:"root,omitempty"`   // library root; empty folders are pruned up to here
 }
 
-// Apply carries out the ready books in the plan. It never overwrites a file,
-// records every completed operation in a journal so it can be undone, and
-// with copy=true leaves the originals untouched.
-func Apply(p *Plan, sourceRoot string, copyOnly bool) (*ApplyResult, error) {
-	if err := os.MkdirAll(p.Dest, 0o755); err != nil {
+// Apply moves the files of every ready plan. It never overwrites a file and
+// records each completed move in a journal under dataDir so it can be undone.
+func Apply(plans []OrgPlan, dataDir string) (*ApplyResult, error) {
+	dir := filepath.Join(dataDir, "journals")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	res := &ApplyResult{Journal: filepath.Join(p.Dest, ".aural-journal-"+time.Now().Format("20060102-150405")+".jsonl")}
+	res := &ApplyResult{Journal: filepath.Join(dir, time.Now().Format("20060102-150405")+".jsonl")}
 	jf, err := os.OpenFile(res.Journal, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("cannot write journal: %w", err)
 	}
 	defer jf.Close()
 	enc := json.NewEncoder(jf)
-
-	emptied := map[string]bool{}
-	for _, bp := range p.Books {
-		if !bp.Ready() {
+	for _, p := range plans {
+		if !p.Ready() {
 			continue
 		}
 		ok := 0
-		for _, m := range bp.Moves {
-			op, err := transfer(m.From, m.To, copyOnly)
-			if err != nil {
+		for _, m := range p.Moves {
+			if _, err := transfer(m.From, m.To, false); err != nil {
 				res.Failed = append(res.Failed, fmt.Sprintf("%s: %v", m.From, err))
 				continue
 			}
-			if err := enc.Encode(journalEntry{Op: op, From: m.From, To: m.To}); err != nil {
+			if err := enc.Encode(journalEntry{Op: "move", From: m.From, To: m.To, Item: p.Item.ID, Folder: p.Item.Folder, Root: p.Root}); err != nil {
 				return res, fmt.Errorf("journal write failed, stopping: %w", err)
 			}
 			jf.Sync()
-			if op == "copy" {
-				res.Copied++
-			} else {
-				res.Moved++
-				emptied[filepath.Dir(m.From)] = true
-			}
+			res.Moved++
 			ok++
 		}
-		if ok == len(bp.Moves) {
-			res.BooksDone++
-		} else {
-			res.BooksPartial++
+		if ok == len(p.Moves) {
+			res.Items = append(res.Items, p.Item.ID)
 		}
+		removeEmptyDirs(map[string]bool{p.Item.Folder: true}, p.Root)
 	}
-	removeEmptyDirs(emptied, sourceRoot)
 	return res, nil
 }
 
@@ -162,11 +153,12 @@ func removeEmptyDirs(dirs map[string]bool, root string) {
 	}
 }
 
-// Undo reverses a journal, newest operation first. Moves go back; copies are deleted.
-func Undo(journal string) (restored int, failed []string, err error) {
+// Undo reverses a journal, newest move first, and returns the entries it
+// restored so the caller can point items back at their old folders.
+func Undo(journal string) (restored []journalEntry, failed []string, err error) {
 	f, err := os.Open(journal)
 	if err != nil {
-		return 0, nil, err
+		return nil, nil, err
 	}
 	var entries []journalEntry
 	sc := bufio.NewScanner(f)
@@ -177,32 +169,24 @@ func Undo(journal string) (restored int, failed []string, err error) {
 		}
 	}
 	f.Close()
-	emptied := map[string]bool{}
 	for i := len(entries) - 1; i >= 0; i-- {
 		e := entries[i]
-		var err error
-		if e.Op == "copy" {
-			err = os.Remove(e.To)
-		} else {
-			_, err = transfer(e.To, e.From, false)
-		}
-		if err != nil {
+		if _, err := transfer(e.To, e.From, false); err != nil {
 			failed = append(failed, fmt.Sprintf("%s: %v", e.To, err))
 			continue
 		}
-		emptied[filepath.Dir(e.To)] = true
-		restored++
+		removeEmptyDirs(map[string]bool{filepath.Dir(e.To): true}, e.Root)
+		restored = append(restored, e)
 	}
-	removeEmptyDirs(emptied, filepath.Dir(journal))
 	if len(failed) == 0 {
 		os.Rename(journal, journal+".undone")
 	}
 	return restored, failed, nil
 }
 
-// Journals lists journals in dest that have not been undone, newest first.
-func Journals(dest string) []string {
-	m, _ := filepath.Glob(filepath.Join(dest, ".aural-journal-*.jsonl"))
+// Journals lists journals that have not been undone, newest first.
+func Journals(dataDir string) []string {
+	m, _ := filepath.Glob(filepath.Join(dataDir, "journals", "*.jsonl"))
 	sort.Sort(sort.Reverse(sort.StringSlice(m)))
 	return m
 }

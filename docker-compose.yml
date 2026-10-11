@@ -1,0 +1,47 @@
+# Aural Organizer: the app, a Whisper speech-to-text service and an LLM.
+#   1. Set AUDIOBOOKS to your library folder (or edit the volume below).
+#   2. docker compose up -d
+#   3. Open http://<this machine>:8078 and add /audiobooks (or a subfolder) as a library.
+# First start downloads the Whisper and LLM models, which takes a while.
+
+services:
+  aural:
+    build: .
+    ports:
+      - "8078:8078"
+    volumes:
+      - ./data:/data                          # database, samples, undo journals
+      - ${AUDIOBOOKS:-./audiobooks}:/audiobooks # your library; needs write access for the final organize step
+    environment:
+      LIBRARIES: /audiobooks                  # libraries to add on start (":"-separated); more can be added in the UI
+      WHISPER_URL: http://whisper:9000
+      WHISPER_LANGUAGE: en
+      OLLAMA_URL: http://ollama:11434         # remove to skip the LLM and use pattern matching
+      OLLAMA_MODEL: llama3.2:3b
+      SAMPLE_SECONDS: 30
+      SAMPLE_START: 0
+      LOOKUP_APIS: audible,openlibrary,googlebooks
+      AUDIBLE_REGION: com                     # com, co.uk, de, fr, ca, com.au, ...
+      # GOOGLE_BOOKS_API_KEY: ""              # optional; raises Google's daily limit
+      # API_LIMITS: "audible=1/2s,300/1h;openlibrary=1/1s,500/1h;googlebooks=1/1s,1000/24h"
+    depends_on: [whisper, ollama]
+    restart: unless-stopped
+
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    environment:
+      ASR_ENGINE: faster_whisper
+      ASR_MODEL: base.en                      # tiny.en is faster, small.en more accurate
+    volumes:
+      - whisper-cache:/root/.cache
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  whisper-cache:
+  ollama:

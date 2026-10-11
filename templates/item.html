@@ -1,0 +1,62 @@
+{{template "top" .}}
+{{$it := .Item}}
+<p><a href="/">← books</a></p>
+<div class="card">
+  <div class="path" style="font-family:ui-monospace,monospace;font-size:12px">{{$it.Folder}}</div>
+  <p><span class="pill {{$it.Status}}">{{label $it.Status}}</span> {{$it.Detail}}
+     {{if $it.Reason}}<br><span class="mut">{{$it.Reason}}</span>{{end}}</p>
+  <p>{{if eq $it.Kind "set"}}Set of {{$it.Total}} files, part 1 is <b>{{index $it.Files 0}}</b>.{{else if eq $it.Kind "single"}}Single file <b>{{index $it.Files 0}}</b>.{{else}}{{len $it.Files}} audio files that are not a set.{{end}} {{mb $it.Bytes}}</p>
+  {{if $it.Sample}}<audio controls preload="none" src="/sample/{{$it.ID}}"></audio>{{end}}
+</div>
+
+<div class="grid2">
+<div class="card">
+  <h3 style="margin-top:0">Heard</h3>
+  {{if $it.Transcript}}<p>“{{$it.Transcript}}”</p>{{else}}<p class="mut">No transcript yet.</p>{{end}}
+  {{with $it.Guess}}{{if or .Title .Author}}
+  <p><small>Read from the transcript ({{.Method}}):</small><br>
+    {{if .Title}}Title: <b>{{.Title}}</b><br>{{end}}{{if .Author}}Author: <b>{{.Author}}</b><br>{{end}}
+    {{if .Narrator}}Narrator: {{.Narrator}}<br>{{end}}{{if .Series}}Series: {{.Series}} {{.SeriesIndex}}{{end}}</p>
+  {{end}}{{end}}
+  {{if ne $it.Kind "not_a_set"}}
+  <form method="post" action="/item/{{$it.ID}}/retry" class="inline"><input type="hidden" name="token" value="{{.Token}}"><input type="hidden" name="from" value="sample"><button>Redo sample + transcript</button></form>
+  {{end}}
+  {{if $it.Transcript}}
+  <form method="post" action="/item/{{$it.ID}}/retry" style="margin-top:8px">
+    <input type="hidden" name="token" value="{{.Token}}"><input type="hidden" name="from" value="lookup">
+    <small>Search the catalogs again, optionally with your own words:</small><br>
+    <input type="text" name="title" placeholder="title" value="{{$it.Guess.Title}}">
+    <input type="text" name="author" placeholder="author" value="{{$it.Guess.Author}}">
+    <button>Queue search</button>
+  </form>{{end}}
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">Book details</h3>
+  <form method="post" action="/item/{{$it.ID}}/edit">
+    <input type="hidden" name="token" value="{{.Token}}">
+    <p><label>Author<br><input type="text" name="author" value="{{$it.Author}}" style="width:100%"></label></p>
+    <p><label>Title<br><input type="text" name="title" value="{{$it.Title}}" style="width:100%"></label></p>
+    <p><label>Series<br><input type="text" name="series" value="{{$it.Series}}"></label>
+       <label>Number<br><input type="text" name="series_index" value="{{$it.SeriesIndex}}" size="5"></label></p>
+    <p><label>Narrator<br><input type="text" name="narrator" value="{{$it.Narrator}}" style="width:100%"></label></p>
+    <button class="primary">Save as matched</button>
+  </form>
+  {{if .Target}}<p><small>Will be organized into</small><br><code>{{rel .Root .Target}}</code></p>{{end}}
+</div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">Catalog matches</h3>
+  {{if $it.Candidates}}
+  <div class="wrap"><table>
+  <tr><th>Score</th><th>Title</th><th>Author</th><th>Series</th><th>Narrator</th><th>Year</th><th>From</th><th></th></tr>
+  {{range $i, $c := $it.Candidates}}
+  <tr><td>{{pct .Score}}</td><td><b>{{.Title}}</b>{{if .Subtitle}}<br><small>{{.Subtitle}}</small>{{end}}</td><td>{{join .Authors ", "}}</td>
+    <td>{{.Series}} {{.SeriesIndex}}</td><td>{{join .Narrators ", "}}</td><td>{{.Year}}</td><td><a href="{{.URL}}" target="_blank" rel="noopener">{{.API}}</a></td>
+    <td><form method="post" action="/item/{{$it.ID}}/accept"><input type="hidden" name="token" value="{{$.Token}}"><input type="hidden" name="candidate" value="{{$i}}"><button>Use this</button></form></td></tr>
+  {{end}}
+  </table></div>
+  {{else}}<p class="mut">No catalog results yet.</p>{{end}}
+</div>
+{{template "bottom" .}}

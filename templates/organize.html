@@ -1,0 +1,27 @@
+{{template "top" .}}
+<div class="card">
+  <p>This is the last step. Matched books move into <code>Author/Series/Vol N - Title</code> (or <code>Author/Title</code>) inside their library, the layout Audiobookshelf reads. Nothing is overwritten, books with a problem are held back, and every move is journaled so it can be undone.</p>
+  <form method="get" action="/organize" class="inline">
+    <select name="lib" onchange="this.form.submit()"><option value="0">All libraries</option>
+      {{range .Libraries}}<option value="{{.ID}}" {{if eq .ID $.Lib}}selected{{end}}>{{.Path}}</option>{{end}}
+    </select>
+  </form>
+  <form method="post" action="/organize" style="margin-top:10px">
+    <input type="hidden" name="token" value="{{.Token}}"><input type="hidden" name="lib" value="{{.Lib}}"><input type="hidden" name="expect" value="{{.Files}}">
+    <label><input type="checkbox" name="confirm"> Move {{.Files}} files ({{mb .Bytes}}) for {{.Ready}} books</label>
+    <button class="primary" {{if not .Ready}}disabled{{end}}>Organize</button>
+  </form>
+</div>
+<div class="wrap"><table>
+<tr><th>From</th><th>To</th><th>Files</th><th>State</th></tr>
+{{range .Plans}}
+<tr><td class="path"><a href="/item/{{.Item.ID}}">{{rel .Root .Item.Folder}}</a></td>
+  <td class="path">{{if .TargetDir}}{{rel .Root .TargetDir}}{{end}}</td>
+  <td>{{len .Moves}}</td>
+  <td>{{if .Problems}}{{range .Problems}}<span class="pill error">held</span> {{.}}<br>{{end}}{{else if .InPlace}}<span class="pill matched">already there</span>{{else}}<span class="pill">ready</span>{{end}}</td></tr>
+{{else}}<tr><td colspan="4" class="mut">No matched books yet.</td></tr>{{end}}
+</table></div>
+{{if .Journals}}<div class="card" style="margin-top:12px"><b>Undo</b><br>
+{{range .Journals}}<form method="post" action="/undo" class="inline"><input type="hidden" name="token" value="{{$.Token}}"><input type="hidden" name="journal" value="{{.}}"><button>Undo {{.}}</button></form> {{end}}
+</div>{{end}}
+{{template "bottom" .}}
