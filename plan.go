@@ -46,11 +46,12 @@ func safeName(s string) string {
 	return s
 }
 
-// TargetDir is Author/Series/NN - Title, or Author/Title without a series.
+// TargetDir follows Audiobookshelf's folder convention:
+// Author/Series/Vol 1 - Title, or Author/Title without a series.
 func TargetDir(dest string, b *Book) string {
 	title := safeName(b.Title)
 	if b.Series != "" && b.SeriesIndex != "" {
-		title = safeName(padIndex(b.SeriesIndex) + " - " + b.Title)
+		title = safeName("Vol " + absIndex(b.SeriesIndex) + " - " + b.Title)
 	}
 	parts := []string{dest, safeName(b.Author)}
 	if s := safeName(b.Series); s != "" {
@@ -59,11 +60,14 @@ func TargetDir(dest string, b *Book) string {
 	return filepath.Join(append(parts, title)...)
 }
 
-func padIndex(s string) string {
-	if i := strings.IndexByte(s, '.'); i == 1 || (i < 0 && len(s) == 1) {
-		return "0" + s
+// absIndex drops leading zeros ("03" -> "3", "01.5" -> "1.5"), the form
+// Audiobookshelf reads back as the series sequence.
+func absIndex(s string) string {
+	t := strings.TrimLeft(s, "0")
+	if t == "" || t[0] == '.' {
+		t = "0" + t
 	}
-	return s
+	return t
 }
 
 func BuildPlan(scan *ScanResult, dest string) *Plan {

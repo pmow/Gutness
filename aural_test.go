@@ -39,6 +39,7 @@ func TestFolderGuess(t *testing.T) {
 		author, series, index, title, year string
 	}{
 		{"Terry Pratchett/Discworld/03 - Equal Rites", "01.mp3", "Terry Pratchett", "Discworld", "03", "Equal Rites", ""},
+		{"Terry Pratchett/Discworld/Vol 3 - Equal Rites", "01.mp3", "Terry Pratchett", "Discworld", "3", "Equal Rites", ""},
 		{"Andy Weir - Project Hail Mary (2021)", "a.mp3", "Andy Weir", "", "", "Project Hail Mary", "2021"},
 		{"James Corey - The Expanse 01 - Leviathan Wakes", "a.mp3", "James Corey", "The Expanse", "01", "Leviathan Wakes", ""},
 		{"Brandon Sanderson/Mistborn/The Final Empire, Book 1", "a.mp3", "Brandon Sanderson", "Mistborn", "1", "The Final Empire", ""},
@@ -102,7 +103,7 @@ func TestApplyAndUndo(t *testing.T) {
 	}
 	want := []string{
 		"Andy Weir/Project Hail Mary/1.mp3", "Andy Weir/Project Hail Mary/2.mp3", "Andy Weir/Project Hail Mary/cover.jpg",
-		"Terry Pratchett/Discworld/03 - Equal Rites/CD1/01.mp3",
+		"Terry Pratchett/Discworld/Vol 3 - Equal Rites/CD1/01.mp3",
 	}
 	if got := listFiles(t, dest); !equal(got, want) {
 		t.Fatalf("dest = %v", got)
@@ -149,8 +150,10 @@ func TestSafeName(t *testing.T) {
 	if got := safeName(`AC/DC: "Live"?  `); got != "AC-DC- -Live--" {
 		t.Errorf("got %q", got)
 	}
-	if got := padIndex("3"); got != "03" {
-		t.Errorf("got %q", got)
+	for in, want := range map[string]string{"03": "3", "1": "1", "01.5": "1.5", "0": "0", "10": "10"} {
+		if got := absIndex(in); got != want {
+			t.Errorf("absIndex(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

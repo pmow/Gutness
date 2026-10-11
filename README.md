@@ -1,9 +1,12 @@
 # Aural Organizer
 
-A small, self-contained web app that sorts an audiobook library into
+A small, self-contained web app that sorts an audiobook library into the
+folder layout [Audiobookshelf](https://www.audiobookshelf.org/docs#book-directory-structure) expects:
 
-    Author/Series/NN - Title/    (books in a series)
-    Author/Title/                (standalone books)
+    Author/Series/Vol 1 - Title/   (books in a series; ABS reads "1" as the sequence)
+    Author/Title/                  (standalone books)
+
+Disc subfolders (CD1, Disc 2) are kept inside the book folder, which ABS also understands.
 
 It was written to cover the places Library Manager fell short: counts that
 don't add up, and a hard dependency on an online API.
